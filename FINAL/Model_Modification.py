@@ -384,6 +384,7 @@ class GlobalBlock(nn.Module):
         self,
         block_type='mlp',
         token_dim=128,
+        token_num=6,
         token_h=2,
         token_w=3,
         mlp_token_exp=4,
@@ -391,8 +392,7 @@ class GlobalBlock(nn.Module):
         use_dynamic=False,
         use_ffn=False,
         norm_pos='post',
-        drop_path_rate=0.,
-        token_num=6
+        drop_path_rate=0.
     ):
         super(GlobalBlock, self).__init__()
 
@@ -400,13 +400,13 @@ class GlobalBlock(nn.Module):
 
         self.block = block_type
         self.num_heads = attn_num_heads
+        self.token_num = token_num
         self.token_h = token_h
         self.token_w = token_w
         self.norm_pos = norm_pos
         self.use_dynamic = use_dynamic
         self.use_ffn = use_ffn
-        self.ffn_exp = 2
-        self.token_num = token_num  # Assign token_num to self.token_num
+        self.ffn_exp = 2 
 
         if self.use_ffn:
             print('use ffn')
