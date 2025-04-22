@@ -392,7 +392,7 @@ class GlobalBlock(nn.Module):
         use_ffn=False,
         norm_pos='post',
         drop_path_rate=0.,
-        token_num=6  # Add token_num as a parameter
+        token_num=6
     ):
         super(GlobalBlock, self).__init__()
 
