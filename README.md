@@ -1,72 +1,74 @@
-# Mobile-Former: Bridging MobileNet and Transformer
+# Performance Analysis of Hybrid CNN-ViT Model  
+**A Comparative Study of Mobile-Former, CoAtNet, and Modified Models for Image Classification**
 
-## Description
+## 📌 Description
+This repository is part of a final undergraduate project titled **"Performance Analysis of CNN-VIT Hybrid Model with Mobile-Former, CoAtNet, and Modified Models for Image Classification with Various Dataset Sizes."**
 
-This project implements and trains Mobile-Former models, which combine the efficiency of MobileNets with the expressiveness of Transformers. The work is based on the paper "Mobile-Former: Bridging MobileNet and Transformer" (CVPR 2022).
+The study aims to compare the performance of three deep learning architectures: **Mobile-Former**, **CoAtNet**, and a **Modified Model (Mobile-Former with Relative Attention)** in image classification tasks using both small (Tiny-ImageNet) and large (ImageNet-1K) datasets.
 
-## Models
+## 🧩 Models Used
 
-The project includes several variants of Mobile-Former models:
+- 🔹 **Mobile-Former**  
+  An efficient model that combines MobileNet and Transformer architecture with lightweight cross-attention.
 
-- mobile_former_508m
-- mobile_former_294m
-- mobile_former_214m
-- mobile_former_151m
-- mobile_former_96m
-- mobile_former_52m
-- mobile_former_26m
+- 🔸 **CoAtNet**  
+  A model that integrates convolution and self-attention, enhanced with relative attention to capture spatial dependencies.
 
-These models vary in size and complexity, offering different trade-offs between performance and computational efficiency.
+- 🔧 **Modified Model**  
+  A variant of Mobile-Former where multi-head attention is replaced with CoAtNet's relative attention to improve classification performance.
 
-## Dataset
+## 📂 Main File Structure
 
-The models are trained on the ImageNet dataset, which consists of 1000 classes. The training script is set up to work with a restructured and resized version of ImageNet.
+| File                                  | Description                                                              |
+|---------------------------------------|--------------------------------------------------------------------------|
+| `Model_CoAtNet.py`                    | CoAtNet model architecture                                               |
+| `Model_MobileFormer.py`               | Mobile-Former model architecture                                         |
+| `Model_Modification.py`               | Modified model combining Mobile-Former and CoAtNet                       |
+| `Flops_Evaluation_[model].py`         | FLOPs-based efficiency evaluation                                        |
+| `Train_[model]_on_Imagenet.py`        | Model training on the ImageNet dataset                                   |
+| `Train_[model]_on_TinyImagenet.py`    | Model training on the TinyImageNet dataset                               |
+| `resize_and_save_to_224.py`           | Image preprocessing for input resizing to 224x224                        |
 
-## Training
+## 🧠 Training
 
-Training is performed using PyTorch. Key training parameters include:
+Model training was conducted using PyTorch. Key training parameters:
 
-- Optimizer: AdamW
-- Learning rate: 1e-3
-- Minimum learning rate: 1e-5
-- Scheduler: Cosine annealing
-- Warmup epochs: 10000
-- Weight decay: 0.05
-- Gradient clipping: 1.0
-- Batch size: 20
-- Total epochs: 300
+- Optimizer: AdamW  
+- Learning rate: 1e-3  
+- Minimum learning rate: 1e-5  
+- Scheduler: Cosine annealing  
+- Warmup epochs: 10000  
+- Weight decay: 0.05  
+- Gradient clipping: 1.0  
+- Batch size: 20  
+- Total epochs: 300  
 
-Data augmentation techniques used:
-- AutoAugment (rand-m15-n2)
-- Mixup (alpha = 0.8)
-- Label smoothing (0.1)
+Data augmentation techniques applied:
+- AutoAugment (rand-m15-n2)  
+- Mixup (alpha = 0.8)  
+- Label smoothing (0.1)  
 
-## Evaluation
+## 📈 Evaluation
 
-The models are evaluated on the ImageNet validation set. The main metrics used are:
+The main metrics used:
 
-- Top-1 accuracy
-- Top-5 accuracy
+- Top-1 Accuracy  
+- FLOPs (Floating Point Operations per Second)
 
-## Usage
+## 📦 Requirements
 
-To train a model:
-
-```python
-python train.py --model mobile_former_294m --data-dir /path/to/imagenet --batch-size 20 --epochs 300
-```
-
-To resume training from a checkpoint:
-
-```python
-python train.py --model mobile_former_294m --data-dir /path/to/imagenet --resume /path/to/checkpoint.pth.tar
-```
-
-## Requirements
-
-- PyTorch
-- torchvision
-- timm
+- PyTorch  
+- torchvision  
+- timm  
 - NVIDIA APEX (optional, for mixed precision training)
 
-Note: Specific version requirements should be added based on the actual dependencies used in the project.
+## 👥 Team  
+**TASI-2425-111**
+
+- 12S21041 – Samuel Christy Angie Sihotang  
+- 12S21052 – Griselda  
+- 12S21057 – Agnes Theresia Siburian  
+
+Del Institute of Technology  
+Information Systems Study Program  
+Undergraduate Final Project – Academic Year 2024/2025
