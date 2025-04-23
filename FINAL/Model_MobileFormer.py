@@ -1,3 +1,5 @@
+#@title 2. DEFINISI ARSITEKTUR MODEL (Mobile-Former)
+#region 2. DEFINISI ARSITEKTUR MODEL (Mobile-Former)
 
 """ Dna blocks used for Mobile-Former
 
@@ -2176,4 +2178,8 @@ def mobile_former_26m(pretrained=False, **kwargs):
     )
     model = _create_mobile_former("mobile_former_26m", pretrained, **model_kwargs)
     return model
+
+
+#endregion
+
 
