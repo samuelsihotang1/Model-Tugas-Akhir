@@ -305,14 +305,14 @@ class Local2Global(nn.Module):
 
 
 class RelativeMultiHeadAttention(nn.Module):
-    def __init__(self, token_dim, num_heads, max_seq_len=1000, scale=True):
+    def __init__(self, token_dim, num_heads, token_num, scale=True):
         super(RelativeMultiHeadAttention, self).__init__()
 
         self.num_heads = num_heads
         self.token_dim = token_dim
         self.scale = scale
         self.head_dim = token_dim // num_heads
-        self.max_seq_len = max_seq_len
+        self.token_num = token_num
         
         # Linear layers for Q, K, V
         self.q = nn.Linear(token_dim, token_dim)
@@ -320,7 +320,7 @@ class RelativeMultiHeadAttention(nn.Module):
         self.v = nn.Linear(token_dim, token_dim)
 
         # Relative positional bias parameter
-        self.relative_position_bias = nn.Parameter(torch.zeros(num_heads, max_seq_len, max_seq_len))  # shape: (num_heads, max_seq_len, max_seq_len)
+        self.relative_position_bias = nn.Parameter(torch.zeros(num_heads, token_num, token_num))  # shape: (num_heads, token_num, token_num)
         
         # Output projection layer
         self.out_proj = nn.Linear(token_dim, token_dim)
@@ -406,7 +406,7 @@ class GlobalBlock(nn.Module):
 
         # Menggunakan RelativeMultiHeadAttention menggantikan Multi-Head Attention biasa
         if 'attn' in self.block:
-            self.attn = RelativeMultiHeadAttention(token_dim=token_dim, num_heads=attn_num_heads)
+            self.attn = RelativeMultiHeadAttention(token_dim=token_dim, num_heads=attn_num_heads, token_num=token_num)
 
         self.channel_mlp = nn.Linear(token_dim, token_dim)
         self.layer_norm = nn.LayerNorm(token_dim)
