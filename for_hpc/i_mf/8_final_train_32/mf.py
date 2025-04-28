@@ -2234,9 +2234,9 @@ from timm.utils import ApexScaler, NativeScaler
 def _assign_hyperparameter(args):
     ### CUSTOM ###
     # Load this checkpoint as if they were the pretrained weights (with adaptation) (default: None).
-    args.pretrained_path = None
+    args.pretrained_path = '/home/tasi2425111/for_hpc/baru/i_mf/8_final_train_32/output/train/20250424-150816-mobile_former_294m-224/checkpoint-14.pth.tar'
     # Resume full model and optimizer state from checkpoint (default: '')
-    args.resume = ''
+    args.resume = '/home/tasi2425111/for_hpc/baru/i_mf/8_final_train_32/output/train/20250424-150816-mobile_former_294m-224/checkpoint-14.pth.tar'
     # path to dataset (root dir)
     args.data_dir = '/home/tasi2425111/restructured_resized_imagenet/'  #Disesuaikan dengan kebutuhan
     # number of label classes (Model default if None)
