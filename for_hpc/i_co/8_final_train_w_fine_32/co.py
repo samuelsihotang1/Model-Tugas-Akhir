@@ -661,7 +661,7 @@ def _assign_hyperparameter(args):
     # Input image center crop percent (for validation only)
     args.crop_pct = False ## Tidak diikutkan karena sudah diresize
     # Use AutoAugment policy. "v0" or "original". (default: None)
-    args.aa = 'rand-m20-n2' ## Operation = 2 , Magnitude = 20
+    args.aa = 'rand-m20-n2-mmax20' ## Operation = 2 , Magnitude = 20
     # mixup alpha, mixup enabled if > 0. (default: 0.)
     args.mixup = 0.8
     # args.loss_type = Softmax # di dalam SoftTargetCrossEntropy() terdapat softmax

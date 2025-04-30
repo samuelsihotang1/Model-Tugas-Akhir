@@ -1,3 +1,4 @@
+
 #@title Train Baru
 #region Train Baru
 
@@ -52,18 +53,19 @@ def _assign_hyperparameter(args):
     # Resume full model and optimizer state from checkpoint (default: '')
     args.resume = ''
     # path to dataset (root dir)
-    args.data_dir = '/home/tasi2425111/restructured_resized_imagenet'  #Disesuaikan dengan kebutuhan
+    args.data_dir = '/home/tasi2425111/restructured-resized-tiny-imagenet-200'  #Disesuaikan dengan kebutuhan
     # number of label classes (Model default if None)
-    args.num_classes = 200  #Disesuaikan dengan kebutuhan
+    args.num_classes = num_classes  #Disesuaikan dengan kebutuhan
     # Name of model to train (default: "resnet50")
     args.model = 'mobile_former_294m' #mobile_former_294m  #Disesuaikan dengan kebutuhan
     # Device (accelerator) to use.
-    args.device = 'cuda:0'
-    
+    args.device = 'cuda:1'
+    args.patience_epochs = 10
+
     # Input image center crop percent (for validation only)
-    # args.crop_pct = None ## Tidak diikutkan karena sudah diresize
+    args.crop_pct = False ## Tidak diikutkan karena sudah diresize
     # Use AutoAugment policy. "v0" or "original". (default: None)
-    args.aa = 'rand-m15-n2-mmax15' ## Operation = 2 , Magnitude = 15, clip magnitude between [0, mmax] instead of default [0, _LEVEL_DENOM]
+    args.aa = 'rand-m20-n2-mmax20' ## Operation = 2 , Magnitude = 20
     # mixup alpha, mixup enabled if > 0. (default: 0.)
     args.mixup = 0.8
     # args.loss_type = Softmax # di dalam SoftTargetCrossEntropy() terdapat softmax
@@ -72,24 +74,24 @@ def _assign_hyperparameter(args):
     # number of epochs to train (default: 300)
     args.epochs = 300
     # Input batch size for training (default: 128)
-    args.batch_size = 20
+    args.batch_size = 32
     # Optimizer (default: "sgd")
     args.opt = 'adamw'
     # learning rate, overrides lr-base if set (default: None)
-    args.lr = 1e-3
+    args.lr = 0.00005
     # lower lr bound for cyclic schedulers that hit 0 (default: 0)
-    args.min_lr = 1e-5
+    # args.min_lr = 0.00005
     # epochs to warmup LR, if scheduler supports
     # args.warmup_epochs = 10000 #diambil dari jumlah data pada train_dataset
-    
+
     # Learning rate scheduler (default: "cosine")
-    args.sched = 'cosine'
+    # args.sched = 'cosine'
     # weight decay (default: 2e-5)
-    args.weight_decay = 0.05
+    args.weight_decay = 0.00000001
     # Clip gradient norm (default: None, no clipping)
     args.clip_grad = 1.0
     # Decay factor for model weights moving average (default: 0.9998)
-    args.model_ema_decay = None
+    args.model_ema_decay = 0.9999
     # Input all image dimensions (d h w, e.g. --input-size 3 224 224), uses model default if empty
 
     args.input_size = (3, 224, 224)
@@ -540,7 +542,9 @@ def main():
             num_classes=-1,  # force head adaptation
         )
 
-    model = globals()[args.model]()
+    # model = globals()[args.model]()
+
+    model = MobileFormer(config_294)
 
     if args.head_init_scale is not None:
         with torch.no_grad():
@@ -714,20 +718,6 @@ def main():
         num_samples=args.train_num_samples,
         trust_remote_code=args.dataset_trust_remote_code,
     )
-
-    dataset_size = 0
-    if hasattr(dataset_train, 'num_samples'):
-        dataset_size = dataset_train.num_samples
-    elif hasattr(dataset_train, '__len__'):
-        dataset_size = len(dataset_train)
-    else:
-        dataset_size = None  # Jika ukuran dataset tidak dapat ditemukan
-
-    steps_per_epoch = dataset_size // args.batch_size
-    warmup_steps = 10000  # Warm-up selama 10K steps
-    
-    # Menghitung berapa banyak epoch yang diperlukan untuk mencapai 10K steps
-    args.warmup_epochs = warmup_steps // steps_per_epoch
 
     if args.val_split:
         dataset_eval = create_dataset(
@@ -1078,7 +1068,7 @@ def train_one_epoch(
     losses_m = utils.AverageMeter()
 
     model.train()
-    
+
     # -- Tambahan: rekam waktu mulai epoch
     epoch_start_time = time.time()
 
@@ -1308,3 +1298,4 @@ def validate(
 
 main()
 #endregion
+
