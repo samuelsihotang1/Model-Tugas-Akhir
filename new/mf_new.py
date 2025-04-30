@@ -1,3 +1,5 @@
+num_classes = 200
+
 #@title 2. DEFINISI ARSITEKTUR MODEL (Mobile-Former)
 #region 2. DEFINISI ARSITEKTUR MODEL (Mobile-Former)
 import math
@@ -641,5 +643,3 @@ class MobileFormer(nn.Module):
         # return x, z
 
 #endregion
-
-
