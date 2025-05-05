@@ -351,11 +351,6 @@ class FeedForward(nn.Module):
         return self.net(x)
 
 
-import torch
-import torch.nn as nn
-import torch.nn.functional as F
-from einops import rearrange, einsum
-
 class Attention(nn.Module):
     def __init__(self, dim, heads=8, dim_head=64, dropout=0., max_len=256):
         """
