@@ -351,78 +351,94 @@ class FeedForward(nn.Module):
         return self.net(x)
 
 
-class RelativeAttention(nn.Module):
-    def __init__(self, dim, heads=8, dim_head=64, dropout=0., inp_h=14, inp_w=14, attn_bias=False):
-        super(RelativeAttention, self).__init__()
-        self.heads = heads
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+from einops import rearrange, einsum
+
+class Attention(nn.Module):
+    def __init__(self, dim, heads=8, dim_head=64, dropout=0., max_len=256):
+        """
+        Memodifikasi Attention agar menggunakan posisi relatif satu dimensi,
+        sekaligus memperbaiki pattern einops.
+        """
+        super(Attention, self).__init__()
         self.dim_head = dim_head
+        self.heads = heads
+        inner_dim = heads * dim_head
+        project_out = not (heads == 1 and dim_head == dim)
+
         self.scale = dim_head ** -0.5
-        self.inp_h = inp_h
-        self.inp_w = inp_w
-        
-        # Q, K, V Linear transformations
-        self.to_qkv = nn.Linear(dim, dim_head * 3 * heads, bias=attn_bias)
-        
-        # Output projection layer
+        self.attend = nn.Softmax(dim=-1)
+        self.to_qkv = nn.Linear(dim, inner_dim * 3, bias=False)
+
         self.to_out = nn.Sequential(
-            nn.Linear(heads * dim_head, dim),
+            nn.Linear(inner_dim, dim),
             nn.Dropout(dropout)
+        ) if project_out else nn.Identity()
+
+        # Bagian Relative Position
+        self.max_len = max_len
+        # [heads, 2*max_len - 1]
+        self.relative_bias = nn.Parameter(
+            torch.randn(heads, (2 * max_len) - 1),
+            requires_grad=True
         )
-        
-        # Initialize relative bias parameter
-        self.relative_bias = nn.Parameter(torch.randn(heads, (2 * inp_h - 1) * (2 * inp_w - 1)), requires_grad=True)
-        self.register_buffer('relative_indices', self._get_relative_indices(inp_h, inp_w))
-        
-    def _get_relative_indices(self, height, width):
-        ticks_y, ticks_x = torch.arange(height), torch.arange(width)
-        grid_y, grid_x = torch.meshgrid(ticks_y, ticks_x)
-        area = height * width
-        out = torch.empty(area, area).fill_(float('nan'))
-        
-        for idx_y in range(height):
-            for idx_x in range(width):
-                rel_indices_y = grid_y - idx_y + height
-                rel_indices_x = grid_x - idx_x + width
-                flatten_indices = (rel_indices_y * width + rel_indices_x).view(-1)
-                out[idx_y * width + idx_x] = flatten_indices
-                
-        assert not out.isnan().any(), '`relative_indices` have blank indices'
-        assert (out >= 0).all(), '`relative_indices` have negative indices'
+        # Indeks relatif 1D. Berbentuk [max_len, max_len].
+        self.register_buffer('relative_indices',
+                             self._get_relative_indices_1d(max_len))
+
+        self.dropout_attn = nn.Dropout(dropout)
+
+    def _get_relative_indices_1d(self, length):
+        # Membuat tabel indeks relatif 1D [length, length].
+        out = torch.empty(length, length).fill_(float('nan'))
+        for i in range(length):
+            for j in range(length):
+                out[i, j] = i - j + (length - 1)
         return out.long()
-    
-    def _interpolate_relative_bias(self, height, width):
-        relative_bias = self.relative_bias.view(1, self.heads, (self.inp_h << 1) - 1, -1)
-        relative_bias = F.interpolate(relative_bias, size=((height << 1) - 1, (width << 1) - 1), mode='bilinear', align_corners=True)
-        return relative_bias.view(self.heads, -1)
-    
+
     def forward(self, x):
-        b, n, c = x.shape
-        h = self.heads
-        len_x = n
-        
-        # Q, K, V computation
+        """
+        x berukuran [b, n, dim].
+        """
+        b, n, _ = x.shape
+
+        # Bagi qkv
         qkv = self.to_qkv(x).chunk(3, dim=-1)
-        q, k, v = map(lambda t: t.view(b, len_x, h, self.dim_head).transpose(1, 2), qkv)
-        
-        # Get relative bias and indices for the current size of the input
-        relative_indices = self.relative_indices
-        relative_bias = self._interpolate_relative_bias(self.inp_h, self.inp_w)
-        relative_indices = relative_indices.view(1, 1, *relative_indices.size()).expand(b, h, -1, -1)
-        relative_bias = relative_bias.view(1, relative_bias.size(0), 1, relative_bias.size(1)).expand(b, -1, len_x, -1)
-        
-        # Add the relative bias to the attention scores
-        relative_biases = relative_bias.gather(dim=-1, index=relative_indices)
-        
-        # Scaled dot-product attention with relative bias
-        dots = torch.matmul(q, k.transpose(-1, -2)) + relative_biases
-        attn = dots.softmax(dim=-1)
-        
-        # Attention output
-        out = torch.matmul(attn, v)
-        out = out.transpose(1, 2).contiguous().view(b, -1, h * self.dim_head)
-        
-        # Final projection layer
+        # Perbaikan pattern dengan (h d):
+        q, k, v = map(
+            lambda t: rearrange(
+                t,
+                'b n (h d) -> b h n d',
+                h=self.heads,
+                d=self.dim_head
+            ),
+            qkv
+        )
+
+        # q@k^T dan penambahan relative bias
+        dots = einsum('b h i d, b h j d -> b h i j', q, k) * self.scale
+
+        # Potong indeks relatif dan bias sesuai n
+        relative_indices = self.relative_indices[:n, :n]
+        relative_indices = relative_indices.view(1, 1, n, n).expand(b, self.heads, -1, -1).to(x.device)
+
+        rel_bias = self.relative_bias.view(1, self.heads, 1, (2 * self.max_len) - 1).expand(b, -1, n, -1)
+        relative_biases = rel_bias.gather(dim=-1, index=relative_indices)
+
+        # Tambahkan ke dots
+        dots = dots + relative_biases
+        attn = self.attend(dots)
+        attn = self.dropout_attn(attn)
+
+        # out
+        out = einsum('b h i j, b h j d -> b h i d', attn, v)
+        out = rearrange(out, 'b h n d -> b n (h d)')
+
         return self.to_out(out)
+
+
 
 
 # inputs: n L C
@@ -435,7 +451,7 @@ class Former(nn.Module):
         # dim_head = dim // heads
         for _ in range(depth):
             self.layers.append(nn.ModuleList([
-                PreNorm(dim, RelativeAttention(dim, heads=heads, dim_head=dim_head, dropout=dropout)),
+                PreNorm(dim, Attention(dim, heads=heads, dim_head=dim_head, dropout=dropout)),
                 PreNorm(dim, FeedForward(dim, mlp_dim, dropout=dropout))
             ]))
 
