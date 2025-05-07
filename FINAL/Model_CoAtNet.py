@@ -1,3 +1,5 @@
+num_classes = 1000
+
 
 #region 2. DEFINISI ARSITEKTUR MODEL (CoAtNet)
 
