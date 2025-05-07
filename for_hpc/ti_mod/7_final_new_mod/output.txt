@@ -1,0 +1,21 @@
+nohup: ignoring input
+Training with a single process on 1 device (cuda:0).
+Model mobile_former_294m created, param count:10298530
+Data processing configuration for current model + dataset:
+	input_size: (3, 224, 224)
+	interpolation: bicubic
+	mean: (0.485, 0.456, 0.406)
+	std: (0.229, 0.224, 0.225)
+	crop_pct: 0.875
+	crop_mode: center
+Created AdamW (adamw) optimizer: lr: 5e-05, betas: (0.9, 0.999), eps: 1e-08, weight_decay: 1e-08, amsgrad: False, foreach: None, maximize: False, capturable: False
+AMP not enabled. Training in torch.float32.
+Scheduled epochs: 300 (epochs + cooldown_epochs). Warmup within epochs when warmup_prefix=False. LR stepped per epoch.
+Train: 0 [   0/3125 (  0%)]  Loss: 5.30 (5.30)  Time: 11.278s,    2.84/s  (11.278s,    2.84/s)  LR: 1.000e-05  Data: 4.051 (4.051)Elapsed/ETA: 11.3s / 35232.6s
+Train: 0 [  50/3125 (  2%)]  Loss: 5.30 (5.30)  Time: 1.668s,   19.19/s  (1.845s,   17.34/s)  LR: 1.000e-05  Data: 0.094 (0.169)Elapsed/ETA: 94.1s / 5672.9s
+Train: 0 [ 100/3125 (  3%)]  Loss: 5.30 (5.30)  Time: 0.955s,   33.50/s  (1.566s,   20.44/s)  LR: 1.000e-05  Data: 0.059 (0.122)Elapsed/ETA: 158.1s / 4734.4s
+Train: 0 [ 150/3125 (  5%)]  Loss: 5.30 (5.30)  Time: 3.235s,    9.89/s  (1.574s,   20.33/s)  LR: 1.000e-05  Data: 0.175 (0.112)Elapsed/ETA: 237.6s / 4680.4s
+Train: 0 [ 200/3125 (  6%)]  Loss: 5.30 (5.30)  Time: 2.440s,   13.11/s  (1.864s,   17.16/s)  LR: 1.000e-05  Data: 0.058 (0.127)Elapsed/ETA: 374.8s / 5451.7s
+Train: 0 [ 250/3125 (  8%)]  Loss: 5.30 (5.30)  Time: 4.428s,    7.23/s  (2.031s,   15.76/s)  LR: 1.000e-05  Data: 0.289 (0.134)Elapsed/ETA: 509.8s / 5837.0s
+Train: 0 [ 300/3125 ( 10%)]  Loss: 5.30 (5.30)  Time: 1.445s,   22.14/s  (2.106s,   15.19/s)  LR: 1.000e-05  Data: 0.039 (0.133)Elapsed/ETA: 634.0s / 5948.5s
+Train: 0 [ 350/3125 ( 11%)]  Loss: 5.30 (5.30)  Time: 1.109s,   28.84/s  (2.029s,   15.77/s)  LR: 1.000e-05  Data: 0.021 (0.126)Elapsed/ETA: 712.1s / 5627.8s
