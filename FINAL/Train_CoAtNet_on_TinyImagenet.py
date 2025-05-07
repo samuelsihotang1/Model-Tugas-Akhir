@@ -595,10 +595,10 @@ class CoAtNet(nn.Module):
 
 #endregion
 
+#@title Train Baru
+#region Train Baru
 
-#region 9. FUNGSI TRAINING
-#@title 9. FUNGSI TRAINING
-
+#!/usr/bin/env python3
 """ ImageNet Training Script
 
 This is intended to be a lean and easily modifiable ImageNet training script that reproduces ImageNet
@@ -614,8 +614,6 @@ NVIDIA CUDA specific speedups adopted from NVIDIA Apex examples
 
 Hacked together by / Copyright 2020 Ross Wightman (https://github.com/rwightman)
 """
-
-#region Import
 import argparse
 import copy
 import importlib
@@ -643,6 +641,62 @@ from timm.optim import create_optimizer_v2, optimizer_kwargs
 from timm.scheduler import create_scheduler_v2, scheduler_kwargs
 from timm.utils import ApexScaler, NativeScaler
 
+
+def _assign_hyperparameter(args):
+    ### CUSTOM ###
+    # Load this checkpoint as if they were the pretrained weights (with adaptation) (default: None).
+    args.pretrained_path = None
+    # Resume full model and optimizer state from checkpoint (default: '')
+    args.resume = ''
+    # path to dataset (root dir)
+    args.data_dir = '/home/tasi2425111/restructured-resized-tiny-imagenet-200'  #Disesuaikan dengan kebutuhan
+    # number of label classes (Model default if None)
+    args.num_classes = num_classes  #Disesuaikan dengan kebutuhan
+    # Name of model to train (default: "resnet50")
+    args.model = 'coatnet_3' #coatnet_3  #Disesuaikan dengan kebutuhan
+    # Device (accelerator) to use.
+    args.device = 'cuda:0'
+    args.patience_epochs = 10
+
+    # Input image center crop percent (for validation only)
+    args.crop_pct = False ## Tidak diikutkan karena sudah diresize
+    # Use AutoAugment policy. "v0" or "original". (default: None)
+    args.aa = 'rand-m20-n2-mmax20' ## Operation = 2 , Magnitude = 20
+    # mixup alpha, mixup enabled if > 0. (default: 0.)
+    args.mixup = 0.8
+    # args.loss_type = Softmax # di dalam SoftTargetCrossEntropy() terdapat softmax
+    # Label smoothing (default: 0.1)
+    args.smoothing = 0.1
+    # number of epochs to train (default: 300)
+    args.epochs = 300
+    # Input batch size for training (default: 128)
+    args.batch_size = 32
+    # Optimizer (default: "sgd")
+    args.opt = 'adamw'
+    # learning rate, overrides lr-base if set (default: None)
+    args.lr = 0.00005
+    # lower lr bound for cyclic schedulers that hit 0 (default: 0)
+    # args.min_lr = 0.00005
+    # epochs to warmup LR, if scheduler supports
+    # args.warmup_epochs = 10000 #diambil dari jumlah data pada train_dataset
+
+    # Learning rate scheduler (default: "cosine")
+    # args.sched = 'cosine'
+    # weight decay (default: 2e-5)
+    args.weight_decay = 0.00000001
+    # Clip gradient norm (default: None, no clipping)
+    args.clip_grad = 1.0
+    # Decay factor for model weights moving average (default: 0.9998)
+    args.model_ema_decay = 0.9999
+    # Input all image dimensions (d h w, e.g. --input-size 3 224 224), uses model default if empty
+
+    args.input_size = (3, 224, 224)
+    # Override mean pixel value of dataset
+    args.mean = (0.485, 0.456, 0.406)
+    # Override std deviation of dataset
+    args.std = (0.229, 0.224, 0.225)
+
+
 try:
     from apex import amp
     from apex.parallel import DistributedDataParallel as ApexDDP
@@ -668,320 +722,359 @@ has_compile = hasattr(torch, 'compile')
 
 
 _logger = logging.getLogger('train')
-#endregion
 
-#region Hyperparameter
-
-class Args:
-    ### CUSTOM ###
-    # Load this checkpoint as if they were the pretrained weights (with adaptation) (default: None).
-    pretrained_path = '/home/tasi2425111/for_hpc/baru/ti_co/11_new_train/output/train/20250405-155132-coatnet_3-224/checkpoint-33.pth.tar'
-    # Resume full model and optimizer state from checkpoint (default: '')
-    resume = '/home/tasi2425111/for_hpc/baru/ti_co/11_new_train/output/train/20250405-155132-coatnet_3-224/checkpoint-33.pth.tar'
-    # path to dataset (root dir)
-    data_dir = '/home/tasi2425111/restructured-resized-tiny-imagenet-200'  #Disesuaikan dengan kebutuhan
-    # number of label classes (Model default if None)
-    num_classes = 200  #Disesuaikan dengan kebutuhan
-    # Name of model to train (default: "resnet50")
-    model = 'coatnet_3' #Coatnet_3  #Disesuaikan dengan kebutuhan
-    # Device (accelerator) to use.
-    device = 'cuda:1'
-    # Input image center crop percent (for validation only)
-    crop_pct = None ## Tidak diikutkan karena sudah diresize
-    # Use AutoAugment policy. "v0" or "original". (default: None)
-    aa = 'rand-m15-n2' ## Operation = 2 , Magnitude = 15
-    # mixup alpha, mixup enabled if > 0. (default: 0.)
-    mixup = 0.8
-    #loss_type = Softmax #Sudah default di code training
-    # Label smoothing (default: 0.1)
-    smoothing = 0.1
-    # number of epochs to train (default: 300)
-    epochs = 300
-    # Input batch size for training (default: 128)
-    batch_size = 20
-    # Validation batch size override (default: None)
-    validation_batch_size = 20
-    # Optimizer (default: "sgd")
-    opt = 'AdamW'
-    # learning rate, overrides lr-base if set (default: None)
-    lr = 1e-3
-    # lower lr bound for cyclic schedulers that hit 0 (default: 0)
-    min_lr = 1e-5
-    # Learning rate scheduler (default: "cosine")
-    sched = 'cosine'
-    # epochs to warmup LR, if scheduler supports
-    warmup_epochs = 10000
-    # weight decay (default: 2e-5)
-    weight_decay = 0.05
-    # Clip gradient norm (default: None, no clipping)
-    clip_grad = 1.0
-    # Decay factor for model weights moving average (default: 0.9998)
-    model_ema_decay = None
-    # Input all image dimensions (d h w, e.g. --input-size 3 224 224), uses model default if empty
-    input_size = (3, 224, 224)
-    # Override mean pixel value of dataset
-    mean = (0.485, 0.456, 0.406)
-    # Override std deviation of dataset
-    std = (0.229, 0.224, 0.225)
+# The first arg parser parses out only the --config argument, this argument is used to
+# load a yaml file containing key-values that override the defaults for the main parser below
+config_parser = parser = argparse.ArgumentParser(description='Training Config', add_help=False)
+parser.add_argument('-c', '--config', default='', type=str, metavar='FILE',
+                    help='YAML config file specifying default arguments')
 
 
-    ### DEFAULT ###
-    # path to dataset (positional is *deprecated*, use --data-dir)
-    data = None
-    # dataset type + name ("<type>/<name>") (default: ImageFolder or ImageTar if empty)
-    dataset = ''
-    # dataset train split (default: train)
-    train_split = 'train'
-    # dataset validation split (default: validation)
-    val_split = 'validation'
-    # Manually specify num samples in train split, for IterableDatasets.
-    train_num_samples = None
-    # Manually specify num samples in validation split, for IterableDatasets.
-    val_num_samples = None
-    # Allow download of dataset for torch/ and tfds/ datasets that support it.
-    dataset_download = False
-    # path to class to idx mapping file (default: "")
-    class_map = ''
-    # Dataset image conversion mode for input images.
-    input_img_mode = None
-    # Dataset key for input images.
-    input_key = None
-    # Dataset key for target labels.
-    target_key = None
-    # Allow huggingface dataset import to execute code downloaded from the dataset's repo.
-    dataset_trust_remote_code = False
-    # Start with pretrained version of specified network (if avail)
-    pretrained = False
-    # Load this checkpoint into model after initialization (default: none)
-    initial_checkpoint = ''
-    # prevent resume of optimizer state when resuming model
-    no_resume_opt = False
-    # Global pool type, one of (fast, avg, max, avgmax, avgmaxc). Model default if None.
-    gp = None
-    # Image size (default: None => model default)
-    img_size = None
-    # Image input channels (default: None => 3)
-    in_chans = None
-    # Image resize interpolation type (overrides model)
-    interpolation = ''
-    # Use channels_last memory layout
-    channels_last = False
-    # Select jit fuser. One of ('', 'te', 'old', 'nvfuser')
-    fuser = ''
-    # The number of steps to accumulate gradients (default: 1)
-    grad_accum_steps = 1
-    # Enable gradient checkpointing through model blocks/stages
-    grad_checkpointing = False
-    # enable experimental fast-norm
-    fast_norm = False
-    # Model kwargs
-    model_kwargs = {}
-    # Head initialization scale
-    head_init_scale = None
-    # Head initialization bias value
-    head_init_bias = None
-    # torch.compile mode (default: None).
-    torchcompile_mode = None
-    # torch.jit.script the full model , action='store_true'
-    torchscript = False
-    # Enable compilation w/ specified backend (default: inductor). const='inductor'
-    torchcompile = None
-    # use NVIDIA Apex AMP or Native AMP for mixed precision training
-    amp = False
-    # lower precision AMP dtype (default: float16)
-    amp_dtype = 'float16'
-    # AMP impl to use, "native" or "apex" (default: native)
-    amp_impl = 'native'
-    # Model dtype override (non-AMP) (default: float32)
-    model_dtype = None
-    # Force broadcast buffers for native DDP to off.
-    no_ddp_bb = False
-    # torch.cuda.synchronize() end of each step
-    synchronize_step = False
-    # Local rank for distributed training
-    local_rank = 0
-    # Python imports for device backend modules.
-    device_modules = None
-    # Optimizer Epsilon (default: None, use opt default)
-    opt_eps = None
-    # Optimizer Betas (default: None, use opt default)
-    opt_betas = None
-    # Optimizer momentum (default: 0.9)
-    momentum = 0.9
-    # Gradient clipping mode. One of ("norm", "value", "agc")
-    clip_mode = 'norm'
-    # layer-wise learning rate decay (default: None)
-    layer_decay = None
-    # action=utils.ParseKwargs
-    opt_kwargs = {}
-    # Apply LR scheduler step on update instead of epoch end.
-    sched_on_updates = False
-    # base learning rate: lr = lr_base * global_batch_size / base_size
-    lr_base = 0.1
-    # base learning rate batch size (divisor, default: 256).
-    lr_base_size = 256
-    # base learning rate vs batch_size scaling ("linear", "sqrt", based on opt if empty)
-    lr_base_scale = ''
-    # learning rate noise on/off epoch percentages
-    lr_noise = None
-    # learning rate noise limit percent (default: 0.67)
-    lr_noise_pct = 0.67
-    # learning rate noise std-dev (default: 1.0)
-    lr_noise_std = 1.0
-    # learning rate cycle len multiplier (default: 1.0)
-    lr_cycle_mul = 1.0
-    # amount to decay each learning rate cycle (default: 0.5)
-    lr_cycle_decay = 0.5
-    # learning rate cycle limit, cycles enabled if > 1
-    lr_cycle_limit = 1
-    # learning rate k-decay for cosine/poly (default: 1.0)
-    lr_k_decay = 1.0
-    # warmup learning rate (default: 1e-5)
-    warmup_lr = 1e-5
-    # epoch repeat multiplier (number of times to repeat dataset epoch per train epoch).
-    epoch_repeats = 0.
-    # manual epoch number (useful on restarts)
-    start_epoch = None
-    # list of decay epoch indices for multistep lr. must be increasing
-    decay_milestones = [90, 180, 270]
-    # epoch interval to decay LR
-    decay_epochs = 90
-    # Exclude warmup period from decay schedule.
-    warmup_prefix = False
-    # epochs to cooldown LR at min_lr, after cyclic schedule ends
-    cooldown_epochs = 0
-    # patience epochs for Plateau LR scheduler (default: 10)
-    patience_epochs = 10
-    # LR decay rate (default: 0.1)
-    decay_rate = 0.1
-    # Disable all training augmentation, override other train aug args
-    no_aug = False
-    # Crop-mode in train
-    train_crop_mode = None
-    # Random resize scale (default: 0.08 1.0)
-    scale = [0.08, 1.0]
-    # Random resize aspect ratio (default: 0.75 1.33)
-    ratio = [3. / 4., 4. / 3.]
-    # Horizontal flip training aug probability
-    hflip = 0.5
-    # Vertical flip training aug probability
-    vflip = 0.
-    # Color jitter factor (default: 0.4)
-    color_jitter = 0.4
-    # Probability of applying any color jitter.
-    color_jitter_prob = None
-    # Probability of applying random grayscale conversion.
-    grayscale_prob = None
-    # Probability of applying gaussian blur.
-    gaussian_blur_prob = None
-    # Number of augmentation repetitions (distributed training only) (default: 0)
-    aug_repeats = 0
-    # Number of augmentation splits (default: 0, valid: 0 or >=2)
-    aug_splits = 0
-    # Enable Jensen-Shannon Divergence + CE loss. Use with `--aug-splits`.
-    jsd_loss = False
-    # Enable BCE loss w/ Mixup/CutMix use.
-    bce_loss = False
-    # Sum over classes when using BCE loss.
-    bce_sum = False
-    # Threshold for binarizing softened BCE targets (default: None, disabled).
-    bce_target_thresh = None
-    # Positive weighting for BCE loss.
-    bce_pos_weight = None
-    # Random erase prob (default: 0.)
-    reprob = 0.
-    # Random erase mode (default: "pixel")
-    remode = 'pixel'
-    # Random erase count (default: 1)
-    recount = 1
-    # Do not random erase first (clean) augmentation split
-    resplit = False
-    # cutmix alpha, cutmix enabled if > 0. (default: 0.)
-    cutmix = 0.0
-    # cutmix min/max ratio, overrides alpha and enables cutmix if set (default: None)
-    cutmix_minmax = None
-    # Probability of performing mixup or cutmix when either/both is enabled
-    mixup_prob = 1.0
-    # Probability of switching to cutmix when both mixup and cutmix enabled
-    mixup_switch_prob = 0.5
-    # How to apply mixup/cutmix params. Per "batch", "pair", or "elem"
-    mixup_mode = 'batch'
-    # Turn off mixup after this epoch, disabled if 0 (default: 0)
-    mixup_off_epoch = 0
-    # Training interpolation (random, bilinear, bicubic default: "random")
-    train_interpolation = 'random'
-    # Dropout rate (default: 0.)
-    drop = 0.0
-    # Drop connect rate, DEPRECATED, use drop-path (default: None)
-    drop_connect = None
-    # Drop path rate (default: None)
-    drop_path = None
-    # Drop block rate (default: None)
-    drop_block = None
-    # BatchNorm momentum override (if not None)
-    bn_momentum = None
-    # BatchNorm epsilon override (if not None)
-    bn_eps = None
-    # Enable NVIDIA Apex or Torch synchronized BatchNorm.
-    sync_bn = False
-    # Distribute BatchNorm stats between nodes after each epoch ("broadcast", "reduce", or "")
-    dist_bn = 'reduce'
-    # Enable separate BN layers per augmentation split.
-    split_bn = False
-    # Enable tracking moving average of model weights.
-    model_ema = False
-    # Force ema to be tracked on CPU, rank=0 node only. Disables EMA validation.
-    model_ema_force_cpu = False
-    # Enable warmup for model EMA decay.
-    model_ema_warmup = False
-    # Random seed (default: 42)
-    seed = 42
-    # worker seed mode (default: all)
-    worker_seeding = 'all'
-    # how many batches to wait before logging training status
-    log_interval = 50
-    # how many batches to wait before writing recovery checkpoint
-    recovery_interval = 0
-    # number of checkpoints to keep (default: 10)
-    checkpoint_hist = 10
-    # how many training processes to use (default: 4)
-    workers = 4
-    # save images of input batches every log interval for debugging
-    save_images = False
-    # Pin CPU memory in DataLoader for more efficient (sometimes) transfer to GPU.
-    pin_mem = False
-    # disable fast prefetcher
-    no_prefetcher = False
-    # path to output folder (default: none, current dir)
-    output = ''
-    # name of train experiment, name of sub-folder for output
-    experiment = ''
-    # Best metric (default: "top1")
-    eval_metric = 'top1'
-    # Test/inference time augmentation (oversampling) factor. 0=None (default: 0)
-    tta = 0
-    # use the multi-epochs-loader to save time at the beginning of every epoch
-    use_multi_epochs_loader = False
-    # log training and validation metrics to wandb
-    log_wandb = False
-    # wandb project name
-    wandb_project = None
-    # wandb tags
-    wandb_tags = []
-    # If resuming a run, the id of the run in wandb
-    wandb_resume_id = ''
+parser = argparse.ArgumentParser(description='PyTorch ImageNet Training')
 
-#endregion
+# Dataset parameters
+group = parser.add_argument_group('Dataset parameters')
+# Keep this argument outside the dataset group because it is positional.
+parser.add_argument('data', nargs='?', metavar='DIR', const=None,
+                    help='path to dataset (positional is *deprecated*, use --data-dir)')
+group.add_argument('--data-dir', metavar='DIR',
+                    help='path to dataset (root dir)')
+group.add_argument('--dataset', metavar='NAME', default='',
+                    help='dataset type + name ("<type>/<name>") (default: ImageFolder or ImageTar if empty)')
+group.add_argument('--train-split', metavar='NAME', default='train',
+                   help='dataset train split (default: train)')
+group.add_argument('--val-split', metavar='NAME', default='validation',
+                   help='dataset validation split (default: validation)')
+group.add_argument('--train-num-samples', default=None, type=int,
+                    metavar='N', help='Manually specify num samples in train split, for IterableDatasets.')
+group.add_argument('--val-num-samples', default=None, type=int,
+                    metavar='N', help='Manually specify num samples in validation split, for IterableDatasets.')
+group.add_argument('--dataset-download', action='store_true', default=False,
+                   help='Allow download of dataset for torch/ and tfds/ datasets that support it.')
+group.add_argument('--class-map', default='', type=str, metavar='FILENAME',
+                   help='path to class to idx mapping file (default: "")')
+group.add_argument('--input-img-mode', default=None, type=str,
+                   help='Dataset image conversion mode for input images.')
+group.add_argument('--input-key', default=None, type=str,
+                   help='Dataset key for input images.')
+group.add_argument('--target-key', default=None, type=str,
+                   help='Dataset key for target labels.')
+group.add_argument('--dataset-trust-remote-code', action='store_true', default=False,
+                   help='Allow huggingface dataset import to execute code downloaded from the dataset\'s repo.')
+
+# Model parameters
+group = parser.add_argument_group('Model parameters')
+group.add_argument('--model', default='resnet50', type=str, metavar='MODEL',
+                   help='Name of model to train (default: "resnet50")')
+group.add_argument('--pretrained', action='store_true', default=False,
+                   help='Start with pretrained version of specified network (if avail)')
+group.add_argument('--pretrained-path', default=None, type=str,
+                   help='Load this checkpoint as if they were the pretrained weights (with adaptation).')
+group.add_argument('--initial-checkpoint', default='', type=str, metavar='PATH',
+                   help='Load this checkpoint into model after initialization (default: none)')
+group.add_argument('--resume', default='', type=str, metavar='PATH',
+                   help='Resume full model and optimizer state from checkpoint (default: none)')
+group.add_argument('--no-resume-opt', action='store_true', default=False,
+                   help='prevent resume of optimizer state when resuming model')
+group.add_argument('--num-classes', type=int, default=None, metavar='N',
+                   help='number of label classes (Model default if None)')
+group.add_argument('--gp', default=None, type=str, metavar='POOL',
+                   help='Global pool type, one of (fast, avg, max, avgmax, avgmaxc). Model default if None.')
+group.add_argument('--img-size', type=int, default=None, metavar='N',
+                   help='Image size (default: None => model default)')
+group.add_argument('--in-chans', type=int, default=None, metavar='N',
+                   help='Image input channels (default: None => 3)')
+group.add_argument('--input-size', default=None, nargs=3, type=int, metavar='N',
+                   help='Input all image dimensions (d h w, e.g. --input-size 3 224 224), uses model default if empty')
+group.add_argument('--crop-pct', default=None, type=float,
+                   metavar='N', help='Input image center crop percent (for validation only)')
+group.add_argument('--mean', type=float, nargs='+', default=None, metavar='MEAN',
+                   help='Override mean pixel value of dataset')
+group.add_argument('--std', type=float, nargs='+', default=None, metavar='STD',
+                   help='Override std deviation of dataset')
+group.add_argument('--interpolation', default='', type=str, metavar='NAME',
+                   help='Image resize interpolation type (overrides model)')
+group.add_argument('-b', '--batch-size', type=int, default=128, metavar='N',
+                   help='Input batch size for training (default: 128)')
+group.add_argument('-vb', '--validation-batch-size', type=int, default=None, metavar='N',
+                   help='Validation batch size override (default: None)')
+group.add_argument('--channels-last', action='store_true', default=False,
+                   help='Use channels_last memory layout')
+group.add_argument('--fuser', default='', type=str,
+                   help="Select jit fuser. One of ('', 'te', 'old', 'nvfuser')")
+group.add_argument('--grad-accum-steps', type=int, default=1, metavar='N',
+                   help='The number of steps to accumulate gradients (default: 1)')
+group.add_argument('--grad-checkpointing', action='store_true', default=False,
+                   help='Enable gradient checkpointing through model blocks/stages')
+group.add_argument('--fast-norm', default=False, action='store_true',
+                   help='enable experimental fast-norm')
+group.add_argument('--model-kwargs', nargs='*', default={}, action=utils.ParseKwargs)
+group.add_argument('--head-init-scale', default=None, type=float,
+                   help='Head initialization scale')
+group.add_argument('--head-init-bias', default=None, type=float,
+                   help='Head initialization bias value')
+group.add_argument('--torchcompile-mode', type=str, default=None,
+                    help="torch.compile mode (default: None).")
+
+# scripting / codegen
+scripting_group = group.add_mutually_exclusive_group()
+scripting_group.add_argument('--torchscript', dest='torchscript', action='store_true',
+                             help='torch.jit.script the full model')
+scripting_group.add_argument('--torchcompile', nargs='?', type=str, default=None, const='inductor',
+                             help="Enable compilation w/ specified backend (default: inductor).")
+
+# Device & distributed
+group = parser.add_argument_group('Device parameters')
+group.add_argument('--device', default='cuda', type=str,
+                    help="Device (accelerator) to use.")
+group.add_argument('--amp', action='store_true', default=False,
+                   help='use NVIDIA Apex AMP or Native AMP for mixed precision training')
+group.add_argument('--amp-dtype', default='float16', type=str,
+                   help='lower precision AMP dtype (default: float16)')
+group.add_argument('--amp-impl', default='native', type=str,
+                   help='AMP impl to use, "native" or "apex" (default: native)')
+group.add_argument('--model-dtype', default=None, type=str,
+                   help='Model dtype override (non-AMP) (default: float32)')
+group.add_argument('--no-ddp-bb', action='store_true', default=False,
+                   help='Force broadcast buffers for native DDP to off.')
+group.add_argument('--synchronize-step', action='store_true', default=False,
+                   help='torch.cuda.synchronize() end of each step')
+group.add_argument("--local_rank", default=0, type=int)
+group.add_argument('--device-modules', default=None, type=str, nargs='+',
+                    help="Python imports for device backend modules.")
+
+# Optimizer parameters
+group = parser.add_argument_group('Optimizer parameters')
+group.add_argument('--opt', default='sgd', type=str, metavar='OPTIMIZER',
+                   help='Optimizer (default: "sgd")')
+group.add_argument('--opt-eps', default=None, type=float, metavar='EPSILON',
+                   help='Optimizer Epsilon (default: None, use opt default)')
+group.add_argument('--opt-betas', default=None, type=float, nargs='+', metavar='BETA',
+                   help='Optimizer Betas (default: None, use opt default)')
+group.add_argument('--momentum', type=float, default=0.9, metavar='M',
+                   help='Optimizer momentum (default: 0.9)')
+group.add_argument('--weight-decay', type=float, default=2e-5,
+                   help='weight decay (default: 2e-5)')
+group.add_argument('--clip-grad', type=float, default=None, metavar='NORM',
+                   help='Clip gradient norm (default: None, no clipping)')
+group.add_argument('--clip-mode', type=str, default='norm',
+                   help='Gradient clipping mode. One of ("norm", "value", "agc")')
+group.add_argument('--layer-decay', type=float, default=None,
+                   help='layer-wise learning rate decay (default: None)')
+group.add_argument('--opt-kwargs', nargs='*', default={}, action=utils.ParseKwargs)
+
+# Learning rate schedule parameters
+group = parser.add_argument_group('Learning rate schedule parameters')
+group.add_argument('--sched', type=str, default='cosine', metavar='SCHEDULER',
+                   help='LR scheduler (default: "cosine"')
+group.add_argument('--sched-on-updates', action='store_true', default=False,
+                   help='Apply LR scheduler step on update instead of epoch end.')
+group.add_argument('--lr', type=float, default=None, metavar='LR',
+                   help='learning rate, overrides lr-base if set (default: None)')
+group.add_argument('--lr-base', type=float, default=0.1, metavar='LR',
+                   help='base learning rate: lr = lr_base * global_batch_size / base_size')
+group.add_argument('--lr-base-size', type=int, default=256, metavar='DIV',
+                   help='base learning rate batch size (divisor, default: 256).')
+group.add_argument('--lr-base-scale', type=str, default='', metavar='SCALE',
+                   help='base learning rate vs batch_size scaling ("linear", "sqrt", based on opt if empty)')
+group.add_argument('--lr-noise', type=float, nargs='+', default=None, metavar='pct, pct',
+                   help='learning rate noise on/off epoch percentages')
+group.add_argument('--lr-noise-pct', type=float, default=0.67, metavar='PERCENT',
+                   help='learning rate noise limit percent (default: 0.67)')
+group.add_argument('--lr-noise-std', type=float, default=1.0, metavar='STDDEV',
+                   help='learning rate noise std-dev (default: 1.0)')
+group.add_argument('--lr-cycle-mul', type=float, default=1.0, metavar='MULT',
+                   help='learning rate cycle len multiplier (default: 1.0)')
+group.add_argument('--lr-cycle-decay', type=float, default=0.5, metavar='MULT',
+                   help='amount to decay each learning rate cycle (default: 0.5)')
+group.add_argument('--lr-cycle-limit', type=int, default=1, metavar='N',
+                   help='learning rate cycle limit, cycles enabled if > 1')
+group.add_argument('--lr-k-decay', type=float, default=1.0,
+                   help='learning rate k-decay for cosine/poly (default: 1.0)')
+group.add_argument('--warmup-lr', type=float, default=1e-5, metavar='LR',
+                   help='warmup learning rate (default: 1e-5)')
+group.add_argument('--min-lr', type=float, default=0, metavar='LR',
+                   help='lower lr bound for cyclic schedulers that hit 0 (default: 0)')
+group.add_argument('--epochs', type=int, default=300, metavar='N',
+                   help='number of epochs to train (default: 300)')
+group.add_argument('--epoch-repeats', type=float, default=0., metavar='N',
+                   help='epoch repeat multiplier (number of times to repeat dataset epoch per train epoch).')
+group.add_argument('--start-epoch', default=None, type=int, metavar='N',
+                   help='manual epoch number (useful on restarts)')
+group.add_argument('--decay-milestones', default=[90, 180, 270], type=int, nargs='+', metavar="MILESTONES",
+                   help='list of decay epoch indices for multistep lr. must be increasing')
+group.add_argument('--decay-epochs', type=float, default=90, metavar='N',
+                   help='epoch interval to decay LR')
+group.add_argument('--warmup-epochs', type=int, default=5, metavar='N',
+                   help='epochs to warmup LR, if scheduler supports')
+group.add_argument('--warmup-prefix', action='store_true', default=False,
+                   help='Exclude warmup period from decay schedule.'),
+group.add_argument('--cooldown-epochs', type=int, default=0, metavar='N',
+                   help='epochs to cooldown LR at min_lr, after cyclic schedule ends')
+group.add_argument('--patience-epochs', type=int, default=10, metavar='N',
+                   help='patience epochs for Plateau LR scheduler (default: 10)')
+group.add_argument('--decay-rate', '--dr', type=float, default=0.1, metavar='RATE',
+                   help='LR decay rate (default: 0.1)')
+
+# Augmentation & regularization parameters
+group = parser.add_argument_group('Augmentation and regularization parameters')
+group.add_argument('--no-aug', action='store_true', default=False,
+                   help='Disable all training augmentation, override other train aug args')
+group.add_argument('--train-crop-mode', type=str, default=None,
+                   help='Crop-mode in train'),
+group.add_argument('--scale', type=float, nargs='+', default=[0.08, 1.0], metavar='PCT',
+                   help='Random resize scale (default: 0.08 1.0)')
+group.add_argument('--ratio', type=float, nargs='+', default=[3. / 4., 4. / 3.], metavar='RATIO',
+                   help='Random resize aspect ratio (default: 0.75 1.33)')
+group.add_argument('--hflip', type=float, default=0.5,
+                   help='Horizontal flip training aug probability')
+group.add_argument('--vflip', type=float, default=0.,
+                   help='Vertical flip training aug probability')
+group.add_argument('--color-jitter', type=float, default=0.4, metavar='PCT',
+                   help='Color jitter factor (default: 0.4)')
+group.add_argument('--color-jitter-prob', type=float, default=None, metavar='PCT',
+                   help='Probability of applying any color jitter.')
+group.add_argument('--grayscale-prob', type=float, default=None, metavar='PCT',
+                   help='Probability of applying random grayscale conversion.')
+group.add_argument('--gaussian-blur-prob', type=float, default=None, metavar='PCT',
+                   help='Probability of applying gaussian blur.')
+group.add_argument('--aa', type=str, default=None, metavar='NAME',
+                   help='Use AutoAugment policy. "v0" or "original". (default: None)'),
+group.add_argument('--aug-repeats', type=float, default=0,
+                   help='Number of augmentation repetitions (distributed training only) (default: 0)')
+group.add_argument('--aug-splits', type=int, default=0,
+                   help='Number of augmentation splits (default: 0, valid: 0 or >=2)')
+group.add_argument('--jsd-loss', action='store_true', default=False,
+                   help='Enable Jensen-Shannon Divergence + CE loss. Use with `--aug-splits`.')
+group.add_argument('--bce-loss', action='store_true', default=False,
+                   help='Enable BCE loss w/ Mixup/CutMix use.')
+group.add_argument('--bce-sum', action='store_true', default=False,
+                   help='Sum over classes when using BCE loss.')
+group.add_argument('--bce-target-thresh', type=float, default=None,
+                   help='Threshold for binarizing softened BCE targets (default: None, disabled).')
+group.add_argument('--bce-pos-weight', type=float, default=None,
+                   help='Positive weighting for BCE loss.')
+group.add_argument('--reprob', type=float, default=0., metavar='PCT',
+                   help='Random erase prob (default: 0.)')
+group.add_argument('--remode', type=str, default='pixel',
+                   help='Random erase mode (default: "pixel")')
+group.add_argument('--recount', type=int, default=1,
+                   help='Random erase count (default: 1)')
+group.add_argument('--resplit', action='store_true', default=False,
+                   help='Do not random erase first (clean) augmentation split')
+group.add_argument('--mixup', type=float, default=0.0,
+                   help='mixup alpha, mixup enabled if > 0. (default: 0.)')
+group.add_argument('--cutmix', type=float, default=0.0,
+                   help='cutmix alpha, cutmix enabled if > 0. (default: 0.)')
+group.add_argument('--cutmix-minmax', type=float, nargs='+', default=None,
+                   help='cutmix min/max ratio, overrides alpha and enables cutmix if set (default: None)')
+group.add_argument('--mixup-prob', type=float, default=1.0,
+                   help='Probability of performing mixup or cutmix when either/both is enabled')
+group.add_argument('--mixup-switch-prob', type=float, default=0.5,
+                   help='Probability of switching to cutmix when both mixup and cutmix enabled')
+group.add_argument('--mixup-mode', type=str, default='batch',
+                   help='How to apply mixup/cutmix params. Per "batch", "pair", or "elem"')
+group.add_argument('--mixup-off-epoch', default=0, type=int, metavar='N',
+                   help='Turn off mixup after this epoch, disabled if 0 (default: 0)')
+group.add_argument('--smoothing', type=float, default=0.1,
+                   help='Label smoothing (default: 0.1)')
+group.add_argument('--train-interpolation', type=str, default='random',
+                   help='Training interpolation (random, bilinear, bicubic default: "random")')
+group.add_argument('--drop', type=float, default=0.0, metavar='PCT',
+                   help='Dropout rate (default: 0.)')
+group.add_argument('--drop-connect', type=float, default=None, metavar='PCT',
+                   help='Drop connect rate, DEPRECATED, use drop-path (default: None)')
+group.add_argument('--drop-path', type=float, default=None, metavar='PCT',
+                   help='Drop path rate (default: None)')
+group.add_argument('--drop-block', type=float, default=None, metavar='PCT',
+                   help='Drop block rate (default: None)')
+
+# Batch norm parameters (only works with gen_efficientnet based models currently)
+group = parser.add_argument_group('Batch norm parameters', 'Only works with gen_efficientnet based models currently.')
+group.add_argument('--bn-momentum', type=float, default=None,
+                   help='BatchNorm momentum override (if not None)')
+group.add_argument('--bn-eps', type=float, default=None,
+                   help='BatchNorm epsilon override (if not None)')
+group.add_argument('--sync-bn', action='store_true',
+                   help='Enable NVIDIA Apex or Torch synchronized BatchNorm.')
+group.add_argument('--dist-bn', type=str, default='reduce',
+                   help='Distribute BatchNorm stats between nodes after each epoch ("broadcast", "reduce", or "")')
+group.add_argument('--split-bn', action='store_true',
+                   help='Enable separate BN layers per augmentation split.')
+
+# Model Exponential Moving Average
+group = parser.add_argument_group('Model exponential moving average parameters')
+group.add_argument('--model-ema', action='store_true', default=False,
+                   help='Enable tracking moving average of model weights.')
+group.add_argument('--model-ema-force-cpu', action='store_true', default=False,
+                   help='Force ema to be tracked on CPU, rank=0 node only. Disables EMA validation.')
+group.add_argument('--model-ema-decay', type=float, default=0.9998,
+                   help='Decay factor for model weights moving average (default: 0.9998)')
+group.add_argument('--model-ema-warmup', action='store_true',
+                   help='Enable warmup for model EMA decay.')
+
+# Misc
+group = parser.add_argument_group('Miscellaneous parameters')
+group.add_argument('--seed', type=int, default=42, metavar='S',
+                   help='random seed (default: 42)')
+group.add_argument('--worker-seeding', type=str, default='all',
+                   help='worker seed mode (default: all)')
+group.add_argument('--log-interval', type=int, default=50, metavar='N',
+                   help='how many batches to wait before logging training status')
+group.add_argument('--recovery-interval', type=int, default=0, metavar='N',
+                   help='how many batches to wait before writing recovery checkpoint')
+group.add_argument('--checkpoint-hist', type=int, default=10, metavar='N',
+                   help='number of checkpoints to keep (default: 10)')
+group.add_argument('-j', '--workers', type=int, default=4, metavar='N',
+                   help='how many training processes to use (default: 4)')
+group.add_argument('--save-images', action='store_true', default=False,
+                   help='save images of input batches every log interval for debugging')
+group.add_argument('--pin-mem', action='store_true', default=False,
+                   help='Pin CPU memory in DataLoader for more efficient (sometimes) transfer to GPU.')
+group.add_argument('--no-prefetcher', action='store_true', default=False,
+                   help='disable fast prefetcher')
+group.add_argument('--output', default='', type=str, metavar='PATH',
+                   help='path to output folder (default: none, current dir)')
+group.add_argument('--experiment', default='', type=str, metavar='NAME',
+                   help='name of train experiment, name of sub-folder for output')
+group.add_argument('--eval-metric', default='top1', type=str, metavar='EVAL_METRIC',
+                   help='Best metric (default: "top1"')
+group.add_argument('--tta', type=int, default=0, metavar='N',
+                   help='Test/inference time augmentation (oversampling) factor. 0=None (default: 0)')
+group.add_argument('--use-multi-epochs-loader', action='store_true', default=False,
+                   help='use the multi-epochs-loader to save time at the beginning of every epoch')
+group.add_argument('--log-wandb', action='store_true', default=False,
+                   help='log training and validation metrics to wandb')
+group.add_argument('--wandb-project', default=None, type=str,
+                   help='wandb project name')
+group.add_argument('--wandb-tags', default=[], type=str, nargs='+',
+                   help='wandb tags')
+group.add_argument('--wandb-resume-id', default='', type=str, metavar='ID',
+                   help='If resuming a run, the id of the run in wandb')
+
+
+def _parse_args():
+    # Do we have a config file to parse?
+    args_config, remaining = config_parser.parse_known_args()
+    if args_config.config:
+        with open(args_config.config, 'r') as f:
+            cfg = yaml.safe_load(f)
+            parser.set_defaults(**cfg)
+
+    # The main arg parser parses the rest of the args, the usual
+    # defaults will have been overridden if config file specified.
+    remaining = [arg for arg in remaining if arg != '-f']
+    args = parser.parse_args(remaining)
+
+    # Cache the args as a text string to save them in the output dir later
+    args_text = yaml.safe_dump(args.__dict__, default_flow_style=False)
+    return args, args_text
+
 
 def main():
     utils.setup_default_logging()
-    args  = Args()
-
-    # model = globals()[args.model]()
-
-    image_size = (3, 224, 224)
-    config=f'coatnet-3'
-    model = CoAtNet(image_size[1], image_size[2], image_size[0], config=config, num_classes=num_classes)
+    args, args_text = _parse_args()
+    _assign_hyperparameter(args)
 
     if args.device_modules:
         for module in args.device_modules:
@@ -1044,6 +1137,12 @@ def main():
             file=args.pretrained_path,
             num_classes=-1,  # force head adaptation
         )
+
+    # model = globals()[args.model]()
+
+    model_image_size = (3, 224, 224)
+    model_config=f'coatnet-3'
+    model = CoAtNet(model_image_size[1], model_image_size[2], model_image_size[0], config=model_config, num_classes=num_classes)
 
     if args.head_init_scale is not None:
         with torch.no_grad():
@@ -1336,6 +1435,7 @@ def main():
             )
         else:
             train_loss_fn = SoftTargetCrossEntropy()
+            # di dalam SoftTargetCrossEntropy() terdapat softmax
     elif args.smoothing:
         if args.bce_loss:
             train_loss_fn = BinaryCrossEntropy(
@@ -1379,8 +1479,8 @@ def main():
             decreasing=decreasing_metric,
             max_history=args.checkpoint_hist
         )
-        # with open(os.path.join(output_dir, 'args.yaml'), 'w') as f:
-        #     f.write(args_text)
+        with open(os.path.join(output_dir, 'args.yaml'), 'w') as f:
+            f.write(args_text)
 
         if args.log_wandb:
             if has_wandb:
@@ -1552,7 +1652,7 @@ def train_one_epoch(
         model_ema=None,
         mixup_fn=None,
         num_updates_total=None,
-  ):
+):
     if args.mixup_off_epoch and epoch >= args.mixup_off_epoch:
         if args.prefetcher and loader.mixup_enabled:
             loader.mixup_enabled = False
@@ -1572,7 +1672,7 @@ def train_one_epoch(
 
     accum_steps = args.grad_accum_steps
     last_accum_steps = len(loader) % accum_steps
-    updates_per_epoch = (len(loader) + accum_steps - 1) // args.grad_accum_steps
+    updates_per_epoch = (len(loader) + accum_steps - 1) // accum_steps
     num_updates = epoch * updates_per_epoch
     last_batch_idx = len(loader) - 1
     last_batch_idx_to_accum = len(loader) - last_accum_steps
@@ -1580,7 +1680,6 @@ def train_one_epoch(
     data_start_time = update_start_time = time.time()
     optimizer.zero_grad()
     update_sample_count = 0
-
     for batch_idx, (input, target) in enumerate(loader):
         last_batch = batch_idx == last_batch_idx
         need_update = last_batch or (batch_idx + 1) % accum_steps == 0
@@ -1687,14 +1786,14 @@ def train_one_epoch(
                     f'Time: {update_time_m.val:.3f}s, {update_sample_count / update_time_m.val:>7.2f}/s  '
                     f'({update_time_m.avg:.3f}s, {update_sample_count / update_time_m.avg:>7.2f}/s)  '
                     f'LR: {lr:.3e}  '
-                    f'Data: {data_time_m.val:.3f} ({data_time_m.avg:.3f})  '
+                    f'Data: {data_time_m.val:.3f} ({data_time_m.avg:.3f})'
                     f'Elapsed/ETA: {waktu_terpakai:.1f}s / {estimasi_sisa:.1f}s'
                 )
 
                 if args.save_images and output_dir:
                     torchvision.utils.save_image(
                         input,
-                        os.path.join(output_dir, f'train-batch-{batch_idx}.jpg'),
+                        os.path.join(output_dir, 'train-batch-%d.jpg' % batch_idx),
                         padding=0,
                         normalize=True
                     )
@@ -1708,6 +1807,7 @@ def train_one_epoch(
 
         update_sample_count = 0
         data_start_time = time.time()
+        # end for
 
     if hasattr(optimizer, 'sync_lookahead'):
         optimizer.sync_lookahead()
@@ -1717,7 +1817,6 @@ def train_one_epoch(
         # synchronize avg loss, each process keeps its own running avg
         loss_avg = torch.tensor([loss_avg], device=device, dtype=torch.float32)
         loss_avg = utils.reduce_tensor(loss_avg, args.world_size).item()
-
     return OrderedDict([('loss', loss_avg)])
 
 
@@ -1795,8 +1894,5 @@ def validate(
 
     return metrics
 
-
 main()
-
-
 #endregion

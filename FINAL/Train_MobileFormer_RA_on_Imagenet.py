@@ -1,2278 +1,706 @@
 num_classes = 1000
 
+#@title 2. DEFINISI ARSITEKTUR MODEL (Mobile-Former)
+#region 2. DEFINISI ARSITEKTUR MODEL (Mobile-Former)
+import math
+import torch
+import random
+import numpy as np
+import torch.nn as nn
 
-#@title 2. DEFINISI ARSITEKTUR MODEL (Modifikasi)
-#region 2. DEFINISI ARSITEKTUR MODEL (Modifikasi)
 
-""" Dna blocks used for Modification
+class MyDyRelu(nn.Module):
+    def __init__(self, k):
+        super(MyDyRelu, self).__init__()
+        self.k = k
 
-A PyTorch impl of Dna blocks
+    def forward(self, inputs):
+        x, relu_coefs = inputs
+        # BxCxHxW -> HxWxBxCx1
+        x_perm = x.permute(2, 3, 0, 1).unsqueeze(-1)
+        # h w b c 1 -> h w b c k
+        output = x_perm * relu_coefs[:, :, :self.k] + relu_coefs[:, :, self.k:]
+        # HxWxBxCxk -> BxCxHxW
+        result = torch.max(output, dim=-1)[0].permute(2, 3, 0, 1)
+        return result
 
-Paper: Modification: Bridging MobileNet and Transformer (CVPR 2022)
-       https://arxiv.org/abs/2108.05895 
 
-"""
+def mixup_data(x, y, alpha, use_cuda=True):
+    if alpha > 0:
+        lam = np.random.beta(alpha, alpha)
+    else:
+        lam = 1
+    b = x.size()[0]
+    if use_cuda:
+        index = torch.randperm(b).cuda()
+    else:
+        index = torch.randperm(b)
+
+    mixed_x = lam * x + (1 - lam) * x[index, :]
+    y_a, y_b = y, y[index]
+    return mixed_x, y_a, y_b, lam
+
+
+def mixup_criterion(criterion, pred, y_a, y_b, lam):
+    return lam * criterion(pred, y_a) + (1 - lam) * criterion(pred, y_b)
+
+
+def cutmix(input, target, beta):
+    lam = np.random.beta(beta, beta)
+    b = input.size()[0]
+    rand_index = torch.randperm(b).cuda()
+    target_a = target
+    target_b = target[rand_index]
+    bx1, by1, bx2, by2 = rand_box(input.size(), lam)
+    input[:, :, bx1:bx2, by1:by2] = input[rand_index, :, bx1:bx2, by1:by2]
+    lam = 1 - ((bx2 - bx1) * (by2 - by1) / (input.size()[-1] * input.size()[-2]))
+    return input, target_a, target_b, lam
+
+
+def cutmix_criterion(criterion, output, target_a, target_b, lam):
+    return lam * criterion(output, target_a) + (1. - lam) * criterion(output, target_b)
+
+
+def rand_box(size, lam):
+    _, _, h, w = size
+    cut_rat = np.sqrt(1. - lam)
+    cut_w = np.int(w * cut_rat)
+    cut_h = np.int(h * cut_rat)
+    # 在图片上随机取一点作为cut的中心点
+    cx = np.random.randint(w)
+    cy = np.random.randint(h)
+    bx1 = np.clip(cx - cut_w // 2, 0, w)
+    by1 = np.clip(cy - cut_h // 2, 0, h)
+    bx2 = np.clip(cx + cut_w // 2, 0, w)
+    by2 = np.clip(cy + cut_h // 2, 0, h)
+    return bx1, by1, bx2, by2
+
+
+'''
+for batch_idx, (inputs, targets) in enumerate(trainloader):
+        if use_cuda:
+            inputs, targets = inputs.cuda(), targets.cuda()
+
+        inputs, targets_a, targets_b, lam = mixup_data(inputs, targets,
+                                                       args.alpha, use_cuda)
+        inputs, targets_a, targets_b = map(Variable, (inputs,
+                                                      targets_a, targets_b))
+        outputs = net(inputs)
+        loss = mixup_criterion(criterion, outputs, targets_a, targets_b, lam)
+        train_loss += loss.data[0]
+        _, predicted = torch.max(outputs.data, 1)
+        total += targets.size(0)
+        correct += (lam * predicted.eq(targets_a.data).cpu().sum().float()
+                    + (1 - lam) * predicted.eq(targets_b.data).cpu().sum().float())
+'''
+
+
+class RandomErasing(object):
+    '''
+    Class that performs Random Erasing in Random Erasing Data Augmentation by Zhong et al.
+    -------------------------------------------------------------------------------------
+    probability: The probability that the operation will be performed.
+    sl: min erasing area
+    sh: max erasing area
+    r1: min aspect ratio
+    mean: erasing value
+    -------------------------------------------------------------------------------------
+    '''
+
+    def __init__(self, probability=0.5, sl=0.02, sh=0.4, r1=0.3, mean=[0.4914, 0.4822, 0.4465]):
+        self.probability = probability
+        self.mean = mean
+        self.sl = sl
+        self.sh = sh
+        self.r1 = r1
+
+    def __call__(self, img):
+
+        if random.uniform(0, 1) > self.probability:
+            return img
+        for attempt in range(100):
+            # 计算图片面积
+            # c h w
+            area = img.size()[1] * img.size()[2]
+            # 比率范围
+            target_area = random.uniform(self.sl, self.sh) * area
+            # 宽高比
+            aspect_ratio = random.uniform(self.r1, 1 / self.r1)
+            h = int(round(math.sqrt(target_area * aspect_ratio)))
+            w = int(round(math.sqrt(target_area / aspect_ratio)))
+            if w < img.size()[2] and h < img.size()[1]:
+                x1 = random.randint(0, img.size()[1] - h)
+                y1 = random.randint(0, img.size()[2] - w)
+                if img.size()[0] == 3:
+                    img[0, x1:x1 + h, y1:y1 + w] = self.mean[0]
+                    img[1, x1:x1 + h, y1:y1 + w] = self.mean[1]
+                    img[2, x1:x1 + h, y1:y1 + w] = self.mean[2]
+                else:
+                    img[0, x1:x1 + h, y1:y1 + w] = self.mean[0]
+                return img
+        return img
+
 
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-
-from timm.models.layers import DropPath
-
-def _make_divisible(v, divisor, min_value=None):
-    """
-    This function is taken from the original tf repo.
-    It ensures that all layers have a channel number that is divisible by 8
-    It can be seen here:
-    https://github.com/tensorflow/models/blob/master/research/slim/nets/mobilenet/mobilenet.py
-    :param v:
-    :param divisor:
-    :param min_value:
-    :return:
-    """
-    if min_value is None:
-        min_value = divisor
-    new_v = max(min_value, int(v + divisor / 2) // divisor * divisor)
-    # Make sure that round down does not go down by more than 10%.
-    if new_v < 0.9 * v:
-        new_v += divisor
-    return new_v
+from torch.nn import init
 
 
-class h_sigmoid(nn.Module):
-    def __init__(self, inplace=True, h_max=1):
-        super(h_sigmoid, self).__init__()
-        self.relu = nn.ReLU6(inplace=inplace)
-        self.h_max = h_max
-
+class hswish(nn.Module):
     def forward(self, x):
-        return self.relu(x + 3) * self.h_max / 6
-
-class h_swish(nn.Module):
-    def __init__(self, inplace=True):
-        super(h_swish, self).__init__()
-        self.sigmoid = h_sigmoid(inplace=inplace)
-
-    def forward(self, x):
-        return x * self.sigmoid(x)
-
-class ChannelShuffle(nn.Module):
-    def __init__(self, groups):
-        super(ChannelShuffle, self).__init__()
-        self.groups = groups
-
-    def forward(self, x):
-        b, c, h, w = x.size()
-
-        channels_per_group = c // self.groups
-
-        # reshape
-        x = x.view(b, self.groups, channels_per_group, h, w)
-
-        x = torch.transpose(x, 1, 2).contiguous()
-
-        # flatten
-        out = x.view(b, -1, h, w)
+        out = x * F.relu6(x + 3, inplace=True) / 6
         return out
 
-class DyReLU(nn.Module):
-    def __init__(self, num_func=2, use_bias=False, scale=2., serelu=False):
-        """
-        num_func: -1: none
-                   0: relu
-                   1: SE
-                   2: dy-relu
-        """
-        super(DyReLU, self).__init__()
 
-        assert(num_func>=-1 and num_func<=2)
-        self.num_func = num_func
-        self.scale = scale
-
-        serelu = serelu and num_func == 1
-        self.act = nn.ReLU6(inplace=True) if num_func == 0 or serelu else nn.Sequential()
-
+class hsigmoid(nn.Module):
     def forward(self, x):
-        if isinstance(x, tuple):
-            out, a = x
-        else:
-            out = x
-
-        out = self.act(out)
-
-
-        if self.num_func == 1:    # SE
-            a = a * self.scale
-            out = out * a
-        elif self.num_func == 2:  # DY-ReLU
-            _, C, _, _ = a.shape
-            a1, a2 = torch.split(a, [C//2, C//2], dim=1)
-            a1 = (a1 - 0.5) * self.scale + 1.0 #  0.0 -- 2.0
-            a2 = (a2 - 0.5) * self.scale       # -1.0 -- 1.0
-            out = torch.max(out*a1, out*a2)
-            
+        out = F.relu6(x + 3, inplace=True) / 6
         return out
 
-class HyperFunc(nn.Module):
-    def __init__(self, token_dim, oup, sel_token_id=0, reduction_ratio=4):
-        super(HyperFunc, self).__init__()
 
-        self.sel_token_id = sel_token_id
-        squeeze_dim = token_dim // reduction_ratio
-        self.hyper = nn.Sequential(
-            nn.Linear(token_dim, squeeze_dim),
+class SeModule(nn.Module):
+    def __init__(self, inp, reduction=4):
+        super(SeModule, self).__init__()
+        self.avg_pool = nn.AdaptiveAvgPool2d(1)
+        self.se = nn.Sequential(
+            nn.Linear(inp, inp // reduction, bias=False),
             nn.ReLU(inplace=True),
-            nn.Linear(squeeze_dim, oup),
-            h_sigmoid()
-        )
-
-
-    def forward(self, x):
-        if isinstance(x, tuple):
-            x, attn = x
-
-        if self.sel_token_id == -1:
-            hp = self.hyper(x).permute(1, 2, 0)         # bs x hyper_dim x T
-
-            bs, T, H, W = attn.shape
-            attn = attn.view(bs, T, H*W)
-            hp = torch.matmul(hp, attn)                  # bs x hyper_dim x HW
-            h = hp.view(bs, -1, H, W)
-        else:
-            t = x[self.sel_token_id]
-            h = self.hyper(t)
-            h = torch.unsqueeze(torch.unsqueeze(h, 2), 3)
-        return h
-
-class MaxDepthConv(nn.Module):
-    def __init__(self, inp, oup, stride):
-        super(MaxDepthConv, self).__init__()
-        self.inp = inp
-        self.oup = oup
-        self.conv1 = nn.Sequential(
-            nn.Conv2d(inp, oup, (3,1), stride, (1, 0), bias=False, groups=inp),
-            nn.BatchNorm2d(oup)
-        )
-        self.conv2 = nn.Sequential(
-            nn.Conv2d(inp, oup, (1,3), stride, (0, 1), bias=False, groups=inp),
-            nn.BatchNorm2d(oup)
+            nn.Linear(inp // reduction, inp, bias=False),
+            hsigmoid()
         )
 
     def forward(self, x):
-        y1 = self.conv1(x)
-        y2 = self.conv2(x)
-
-        out = torch.max(y1, y2)
-        return out
-
-class Local2GlobalAttn(nn.Module):
-    def __init__(
-        self,
-        inp,
-        token_dim=128,
-        token_num=6,
-        inp_res=0,
-        norm_pos='post',
-        drop_path_rate=0.
-    ):
-        super(Local2GlobalAttn, self).__init__()
-
-        num_heads = 2
-        self.scale = (inp // num_heads) ** -0.5
-
-        self.q = nn.Linear(token_dim, inp)
-        self.proj = nn.Linear(inp, token_dim)
-        
-        self.layer_norm = nn.LayerNorm(token_dim)
-        self.drop_path = DropPath(drop_path_rate)
+        se = self.avg_pool(x)
+        b, c, _, _ = se.size()
+        se = se.view(b, c)
+        se = self.se(se).view(b, c, 1, 1)
+        return x * se.expand_as(x)
 
 
-    def forward(self, x):
-        features, tokens = x
-        bs, C, _, _ = features.shape
+class Mobile(nn.Module):
+    def __init__(self, ks, inp, hid, out, se, stride, dim, reduction=4, k=2):
+        super(Mobile, self).__init__()
+        self.hid = hid
+        self.k = k
+        self.fc1 = nn.Linear(dim, dim // reduction)
+        self.relu = nn.ReLU(inplace=True)
+        self.fc2 = nn.Linear(dim // reduction, 2 * k * hid)
+        self.sigmoid = nn.Sigmoid()
 
-        t = self.q(tokens).permute(1, 0, 2) # from T x bs x Ct to bs x T x Ct
-        k = features.view(bs, C, -1)        # bs x C x HW
-        attn = (t @ k) * self.scale
+        self.register_buffer('lambdas', torch.Tensor([1.] * k + [0.5] * k).float())
+        self.register_buffer('init_v', torch.Tensor([1.] + [0.] * (2 * k - 1)).float())
+        self.stride = stride
+        # self.se = DyReLUB(channels=out, k=1) if dyrelu else se
+        self.se = se
 
-        attn_out = attn.softmax(dim=-1)             # bs x T x HW
-        attn_out = (attn_out @ k.permute(0, 2, 1))  # bs x T x C
-                                                    # note here: k=v without transform
-        t = self.proj(attn_out.permute(1, 0, 2))    #T x bs x C
+        self.conv1 = nn.Conv2d(inp, hid, kernel_size=1, stride=1, padding=0, bias=False)
+        self.bn1 = nn.BatchNorm2d(hid)
+        self.act1 = MyDyRelu(2)
 
-        tokens = tokens + self.drop_path(t)
-        tokens = self.layer_norm(tokens)
+        self.conv2 = nn.Conv2d(hid, hid, kernel_size=ks, stride=stride,
+                               padding=ks // 2, groups=hid, bias=False)
+        self.bn2 = nn.BatchNorm2d(hid)
+        self.act2 = MyDyRelu(2)
 
-        return tokens
+        self.conv3 = nn.Conv2d(hid, out, kernel_size=1, stride=1, padding=0, bias=False)
+        self.bn3 = nn.BatchNorm2d(out)
 
-class Local2Global(nn.Module):
-    def __init__(
-            self,
-            inp,
-            block_type='mlp',
-            token_dim=128,
-            token_num=6,
-            inp_res=0,
-            attn_num_heads=2,
-            use_dynamic=False,
-            norm_pos='post',
-            drop_path_rate=0.,
-            remove_proj_local=True,
-        ):
-        super(Local2Global, self).__init__()
-        print(f'L2G: {attn_num_heads} heads, inp: {inp}, token: {token_dim}')
-
-        self.num_heads = attn_num_heads
-        self.token_num = token_num 
-        self.norm_pos = norm_pos
-        self.block = block_type
-        self.use_dynamic = use_dynamic
-
-        if self.use_dynamic:
-            self.alpha_scale = 2.0
-            self.alpha = nn.Sequential(
-                nn.Linear(token_dim, inp),
-                h_sigmoid(),
+        self.shortcut = nn.Identity()
+        if stride == 1 and inp != out:
+            self.shortcut = nn.Sequential(
+                nn.Conv2d(inp, out, kernel_size=1, stride=1, padding=0, bias=False),
+                nn.BatchNorm2d(out),
             )
 
+    def get_relu_coefs(self, z):
+        theta = z[:, 0, :]
+        # b d -> b d//4
+        theta = self.fc1(theta)
+        theta = self.relu(theta)
+        # b d//4 -> b 2*k
+        theta = self.fc2(theta)
+        theta = 2 * self.sigmoid(theta) - 1
+        # b 2*k
+        return theta
 
-        if 'mlp' in block_type:
-            self.mlp = nn.Linear(inp_res, token_num)
+    def forward(self, x, z):
+        theta = self.get_relu_coefs(z)
+        # b 2*k*c -> b c 2*k                                     2*k            2*k
+        relu_coefs = theta.view(-1, self.hid, 2 * self.k) * self.lambdas + self.init_v
 
-        if 'attn' in block_type:
-            self.scale = (inp // attn_num_heads) ** -0.5
-            self.q = nn.Linear(token_dim, inp)
+        out = self.bn1(self.conv1(x))
+        out_ = [out, relu_coefs]
+        out = self.act1(out_)
 
-        self.proj = nn.Linear(inp, token_dim)
-        self.layer_norm = nn.LayerNorm(token_dim)
-        self.drop_path = DropPath(drop_path_rate)
-        
-        self.remove_proj_local = remove_proj_local
-        if self.remove_proj_local == False:
-            self.k = nn.Conv2d(inp, inp, 1, 1, 0, bias=False)
-            self.v = nn.Conv2d(inp, inp, 1, 1, 0, bias=False)
-            
+        out = self.bn2(self.conv2(out))
+        out_ = [out, relu_coefs]
+        out = self.act2(out_)
+
+        out = self.bn3(self.conv3(out))
+        if self.se is not None:
+            out = self.se(out)
+        out = out + self.shortcut(x) if self.stride == 1 else out
+        return out
+
+
+class MobileDown(nn.Module):
+    def __init__(self, ks, inp, hid, out, se, stride, dim, reduction=4, k=2):
+        super(MobileDown, self).__init__()
+        self.dim = dim
+        self.hid, self.out = hid, out
+        self.k = k
+        self.fc1 = nn.Linear(dim, dim // reduction)
+        self.relu = nn.ReLU(inplace=True)
+        self.fc2 = nn.Linear(dim // reduction, 2 * k * hid)
+        self.sigmoid = nn.Sigmoid()
+        self.register_buffer('lambdas', torch.Tensor([1.] * k + [0.5] * k).float())
+        self.register_buffer('init_v', torch.Tensor([1.] + [0.] * (2 * k - 1)).float())
+        self.stride = stride
+        # self.se = DyReLUB(channels=out, k=1) if dyrelu else se
+        self.se = se
+
+        self.dw_conv1 = nn.Conv2d(inp, hid, kernel_size=ks, stride=stride,
+                                  padding=ks // 2, groups=inp, bias=False)
+        self.dw_bn1 = nn.BatchNorm2d(hid)
+        self.dw_act1 = MyDyRelu(2)
+
+        self.pw_conv1 = nn.Conv2d(hid, inp, kernel_size=1, stride=1, padding=0, bias=False)
+        self.pw_bn1 = nn.BatchNorm2d(inp)
+        self.pw_act1 = nn.ReLU()
+
+        self.dw_conv2 = nn.Conv2d(inp, hid, kernel_size=ks, stride=1,
+                                  padding=ks // 2, groups=inp, bias=False)
+        self.dw_bn2 = nn.BatchNorm2d(hid)
+        self.dw_act2 = MyDyRelu(2)
+
+        self.pw_conv2 = nn.Conv2d(hid, out, kernel_size=1, stride=1, padding=0, bias=False)
+        self.pw_bn2 = nn.BatchNorm2d(out)
+
+        self.shortcut = nn.Identity()
+        if stride == 1 and inp != out:
+            self.shortcut = nn.Sequential(
+                nn.Conv2d(inp, out, kernel_size=1, stride=1, padding=0, bias=False),
+                nn.BatchNorm2d(out),
+            )
+
+    def get_relu_coefs(self, z):
+        theta = z[:, 0, :]
+        # b d -> b d//4
+        theta = self.fc1(theta)
+        theta = self.relu(theta)
+        # b d//4 -> b 2*k
+        theta = self.fc2(theta)
+        theta = 2 * self.sigmoid(theta) - 1
+        # b 2*k
+        return theta
+
+    def forward(self, x, z):
+        theta = self.get_relu_coefs(z)
+        # b 2*k*c -> b c 2*k                                     2*k            2*k
+        relu_coefs = theta.view(-1, self.hid, 2 * self.k) * self.lambdas + self.init_v
+
+        out = self.dw_bn1(self.dw_conv1(x))
+        out_ = [out, relu_coefs]
+        out = self.dw_act1(out_)
+        out = self.pw_act1(self.pw_bn1(self.pw_conv1(out)))
+
+        out = self.dw_bn2(self.dw_conv2(out))
+        out_ = [out, relu_coefs]
+        out = self.dw_act2(out_)
+        out = self.pw_bn2(self.pw_conv2(out))
+
+        if self.se is not None:
+            out = self.se(out)
+        out = out + self.shortcut(x) if self.stride == 1 else out
+        return out
+
+
+import torch
+from torch import nn, einsum
+from einops import rearrange, repeat
+from einops.layers.torch import Rearrange
+
+
+def pair(t):
+    return t if isinstance(t, tuple) else (t, t)
+
+
+class PreNorm(nn.Module):
+    def __init__(self, dim, fn):
+        super(PreNorm, self).__init__()
+        self.norm = nn.LayerNorm(dim)
+        self.fn = fn
+
+    def forward(self, x, **kwargs):
+        return self.fn(self.norm(x), **kwargs)
+
+
+class FeedForward(nn.Module):
+    def __init__(self, dim, hidden_dim, dropout=0.):
+        super(FeedForward, self).__init__()
+        self.net = nn.Sequential(
+            nn.Linear(dim, hidden_dim),
+            nn.GELU(),
+            nn.Dropout(dropout),
+            nn.Linear(hidden_dim, dim),
+            nn.Dropout(dropout)
+        )
 
     def forward(self, x):
-        features, tokens = x # features: bs x C x H x W
-                             #   tokens: T x bs x Ct
+        return self.net(x)
 
-        bs, C, H, W = features.shape
-        T, _, _ = tokens.shape
-        attn = None
 
-        if 'mlp' in self.block:
-            t_sum = self.mlp(features.view(bs, C, -1)).permute(2, 0, 1) # T x bs x C            
+class Attention(nn.Module):
+    def __init__(self, dim, heads=8, dim_head=64, dropout=0., max_len=256):
+        """
+        Memodifikasi Attention agar menggunakan posisi relatif satu dimensi,
+        sekaligus memperbaiki pattern einops.
+        """
+        super(Attention, self).__init__()
+        self.dim_head = dim_head
+        self.heads = heads
+        inner_dim = heads * dim_head
+        project_out = not (heads == 1 and dim_head == dim)
 
-        if 'attn' in self.block:
-            t = self.q(tokens).view(T, bs, self.num_heads, -1).permute(1, 2, 0, 3)  # from T x bs x Ct to bs x N x T x Ct/N
-            if self.remove_proj_local:
-                k = features.view(bs, self.num_heads, -1, H*W)                          # bs x N x C/N x HW
-                attn = (t @ k) * self.scale                                             # bs x N x T x HW
-    
-                attn_out = attn.softmax(dim=-1)                 # bs x N x T x HW
-                attn_out = (attn_out @ k.transpose(-1, -2))     # bs x N x T x C/N (k: bs x N x C/N x HW)
-                                                                # note here: k=v without transform
-            else:
-                k = self.k(features).view(bs, self.num_heads, -1, H*W)                          # bs x N x C/N x HW
-                v = self.v(features).view(bs, self.num_heads, -1, H*W)                          # bs x N x C/N x HW 
-                attn = (t @ k) * self.scale                                             # bs x N x T x HW
-    
-                attn_out = attn.softmax(dim=-1)                 # bs x N x T x HW
-                attn_out = (attn_out @ v.transpose(-1, -2))     # bs x N x T x C/N (k: bs x N x C/N x HW)
-                                                                # note here: k=v without transform
- 
-            t_a = attn_out.permute(2, 0, 1, 3)              # T x bs x N x C/N
-            t_a = t_a.reshape(T, bs, -1)
+        self.scale = dim_head ** -0.5
+        self.attend = nn.Softmax(dim=-1)
+        self.to_qkv = nn.Linear(dim, inner_dim * 3, bias=False)
 
-            if 'mlp' in self.block:
-                t_sum = t_sum + t_a
-            else:
-                t_sum = t_a
+        self.to_out = nn.Sequential(
+            nn.Linear(inner_dim, dim),
+            nn.Dropout(dropout)
+        ) if project_out else nn.Identity()
 
-        if self.use_dynamic:
-            alp = self.alpha(tokens) * self.alpha_scale
-            t_sum = t_sum * alp
-
-        t_sum = self.proj(t_sum)
-        tokens = tokens + self.drop_path(t_sum)
-        tokens = self.layer_norm(tokens)
-
-        if attn is not None:
-            bs, Nh, Ca, HW = attn.shape
-            attn = attn.view(bs, Nh, Ca, H, W)
-
-        return tokens, attn
-
-#---------------------------------------------------------------------------------------------------------------
-
-class RelativeAttention(nn.Module):
-    def __init__(self, inp_h, inp_w, in_channels, n_head, d_k, d_v, out_channels, attn_dropout=0.1, ff_dropout=0.1, attn_bias=False):
-        super().__init__()
-        self.inp_h = inp_h
-        self.inp_w = inp_w
-        self.n_head = n_head
-        self.d_k = d_k
-        self.d_v = d_v
-        self.Q = nn.Linear(in_channels, n_head * d_k, bias=attn_bias)
-        self.K = nn.Linear(in_channels, n_head * d_k, bias=attn_bias)
-        self.V = nn.Linear(in_channels, n_head * d_v, bias=attn_bias)
-        self.ff = nn.Linear(n_head * d_v, out_channels)
-        self.attn_dropout = nn.Dropout2d(attn_dropout)
-        self.ff_dropout = nn.Dropout(ff_dropout)
+        # Bagian Relative Position
+        self.max_len = max_len
+        # [heads, 2*max_len - 1]
         self.relative_bias = nn.Parameter(
-            torch.randn(n_head, ((inp_h << 1) - 1) * ((inp_w << 1) - 1)),
+            torch.randn(heads, (2 * max_len) - 1),
             requires_grad=True
         )
-        self.register_buffer('relative_indices', self._get_relative_indices(inp_h, inp_w))
+        # Indeks relatif 1D. Berbentuk [max_len, max_len].
+        self.register_buffer('relative_indices',
+                             self._get_relative_indices_1d(max_len))
 
-    def _get_relative_indices(self, height, width):
-        ticks_y, ticks_x = torch.arange(height), torch.arange(width)
-        grid_y, grid_x = torch.meshgrid(ticks_y, ticks_x)
-        area = height * width
-        out = torch.empty(area, area).fill_(float('nan'))
-        for idx_y in range(height):
-            for idx_x in range(width):
-                rel_indices_y = grid_y - idx_y + height
-                rel_indices_x = grid_x - idx_x + width
-                flatten_indices = (rel_indices_y * width + rel_indices_x).view(-1)
-                out[idx_y * width + idx_x] = flatten_indices
-        assert not out.isnan().any(), '`relative_indices` have blank indices'
-        assert (out >= 0).all(), '`relative_indices` have negative indices'
+        self.dropout_attn = nn.Dropout(dropout)
+
+    def _get_relative_indices_1d(self, length):
+        # Membuat tabel indeks relatif 1D [length, length].
+        out = torch.empty(length, length).fill_(float('nan'))
+        for i in range(length):
+            for j in range(length):
+                out[i, j] = i - j + (length - 1)
         return out.long()
 
-    def _interpolate_relative_bias(self, height, width):
-        relative_bias = self.relative_bias.view(1, self.n_head, (self.inp_h << 1) - 1, -1)
-        relative_bias = F.interpolate(relative_bias, size=((height << 1) - 1, (width << 1) - 1), mode='bilinear', align_corners=True)
-        return relative_bias.view(self.n_head, -1)
-
-    def update_relative_bias_and_indices(self, height, width):
-        self.relative_indices = self._get_relative_indices(height, width)
-        self.relative_bias = self._interpolate_relative_bias(height, width)
-
     def forward(self, x):
-        b, c, H, W, h = *x.shape, self.n_head
-    
-        len_x = H * W
-        x = x.view(b, c, len_x).transpose(-1, -2)
-        q = self.Q(x).view(b, len_x, self.n_head, self.d_k).transpose(1, 2)
-        k = self.K(x).view(b, len_x, self.n_head, self.d_k).transpose(1, 2)
-        v = self.V(x).view(b, len_x, self.n_head, self.d_v).transpose(1, 2)
-
-        if H == self.inp_h and W == self.inp_w:
-            relative_indices = self.relative_indices
-            relative_bias = self.relative_bias
-        else:
-            relative_indices = self._get_relative_indices(H, W).to(x.device)
-            relative_bias = self._interpolate_relative_bias(H, W)
-
-        relative_indices = relative_indices.view(1, 1, *relative_indices.size()).expand(b, h, -1, -1)
-        relative_bias = relative_bias.view(1, relative_bias.size(0), 1, relative_bias.size(1)).expand(b, -1, len_x, -1)
-        relative_biases = relative_bias.gather(dim=-1, index=relative_indices)
-
-        similarity = torch.matmul(q, k.transpose(-1, -2)) + relative_biases
-        similarity = similarity.softmax(dim=-1)
-        similarity = self.attn_dropout(similarity)
-        
-        out = torch.matmul(similarity, v)
-        out = out.transpose(1, 2).contiguous().view(b, -1, self.n_head * self.d_v)
-        out = self.ff(out)
-        out = self.ff_dropout(out)
-        out = out.transpose(-1, -2).view(b, -1, H, W)
-        return out
-
-
-class GlobalBlock(nn.Module):
-    def __init__(
-        self,
-        block_type='mlp',
-        token_dim=128,
-        token_h=2,
-        token_w=3,
-        mlp_token_exp=4,
-        attn_num_heads=4,
-        use_dynamic=False,
-        use_ffn=False,
-        norm_pos='post',
-        drop_path_rate=0.,
-        token_num=6  # Add token_num as a parameter
-    ):
-        super(GlobalBlock, self).__init__()
-
-        print(f'G2G: {attn_num_heads} heads')
-
-        self.block = block_type
-        self.num_heads = attn_num_heads
-        self.token_h = token_h
-        self.token_w = token_w
-        self.norm_pos = norm_pos
-        self.use_dynamic = use_dynamic
-        self.use_ffn = use_ffn
-        self.ffn_exp = 2
-        self.token_num = token_num  # Assign token_num to self.token_num
-
-        if self.use_ffn:
-            print('use ffn')
-            self.ffn = nn.Sequential(
-                nn.Linear(token_dim, token_dim * self.ffn_exp),
-                nn.GELU(),
-                nn.Linear(token_dim * self.ffn_exp, token_dim)
-            )
-            self.ffn_norm = nn.LayerNorm(token_dim)
-
-        if self.use_dynamic:
-            self.alpha_scale = 2.0
-            self.alpha = nn.Sequential(
-                nn.Linear(token_dim, token_dim),
-                h_sigmoid(),
-            )
-
-        if 'mlp' in self.block:
-            self.token_mlp = nn.Sequential(
-                nn.Linear(token_h * token_w, token_h * token_w * mlp_token_exp),
-                nn.GELU(),
-                nn.Linear(token_h * token_w * mlp_token_exp, token_h * token_w),
-            )
-
-        if 'attn' in self.block:
-            self.relative_attn = RelativeAttention(
-                inp_h=token_h,
-                inp_w=token_w,
-                in_channels=token_dim,
-                n_head=attn_num_heads,
-                d_k=token_dim // attn_num_heads,
-                d_v=token_dim // attn_num_heads,
-                out_channels=token_dim,
-                attn_dropout=0.1,
-                ff_dropout=0.1,
-                attn_bias=False
-            )
-
-        self.channel_mlp = nn.Linear(token_dim, token_dim)
-        self.layer_norm = nn.LayerNorm(token_dim)
-        self.drop_path = DropPath(drop_path_rate)
-
-    def forward(self, x):
-        tokens = x
-        T, bs, C = tokens.shape
-
-        if 'mlp' in self.block:
-            t = self.token_mlp(tokens.permute(1, 2, 0))  # bs x channel x token_num
-            t_sum = t.permute(2, 0, 1)                    # token_num x bs x channel
-
-        if 'attn' in self.block:
-            tokens_reshaped = tokens.permute(1, 2, 0).view(bs, C, self.token_h, self.token_w)  # bs x C x H x W
-            attn_out = self.relative_attn(tokens_reshaped)  # Apply RelativeAttention
-            attn_out = attn_out.reshape(T, bs, C)  # Reshape back to (T, bs, C)
-            t_sum = attn_out + t_sum if 'mlp' in self.block else attn_out
-
-        if self.use_dynamic:
-            alp = self.alpha(tokens) * self.alpha_scale
-            t_sum = t_sum * alp
-
-        t_sum = self.channel_mlp(t_sum)  # token_num x bs x channel
-        tokens = tokens + self.drop_path(t_sum)
-        tokens = self.layer_norm(tokens)
-
-        if self.use_ffn:
-            t_ffn = self.ffn(tokens)
-            tokens = tokens + t_ffn
-            tokens = self.ffn_norm(tokens)
-
-        return tokens
-
-
-#---------------------------------------------------------------------------------------------------------------
-
-class Global2Local(nn.Module):
-    def __init__(
-        self,
-        inp,
-        inp_res=0,
-        block_type='mlp',
-        token_dim=128,
-        token_num=6,
-        attn_num_heads=2,
-        use_dynamic=False,
-        drop_path_rate=0.,
-        remove_proj_local=True, 
-    ):
-        super(Global2Local, self).__init__()
-        print(f'G2L: {attn_num_heads} heads, inp: {inp}, token: {token_dim}')
-
-        self.token_num = token_num
-        self.num_heads = attn_num_heads
-        self.block = block_type
-        self.use_dynamic = use_dynamic
-
-        if self.use_dynamic:
-            self.alpha_scale = 2.0
-            self.alpha = nn.Sequential(
-                nn.Linear(token_dim, inp),
-                h_sigmoid(),
-            )
-
-
-        if 'mlp' in self.block:
-            self.mlp = nn.Linear(token_num, inp_res)
-
-        if 'attn' in self.block:
-            self.scale = (inp // attn_num_heads) ** -0.5
-            self.k = nn.Linear(token_dim, inp)
-
-        self.proj = nn.Linear(token_dim, inp)
-        self.drop_path = DropPath(drop_path_rate)
-
-        self.remove_proj_local = remove_proj_local
-        if self.remove_proj_local == False:
-            self.q = nn.Conv2d(inp, inp, 1, 1, 0, bias=False)
-            self.fuse = nn.Conv2d(inp, inp, 1, 1, 0, bias=False)
- 
-    def forward(self, x):
-        out, tokens = x
-
-        if self.use_dynamic:
-            alp = self.alpha(tokens) * self.alpha_scale
-            v = self.proj(tokens)
-            v = (v * alp).permute(1, 2, 0)
-        else:
-            v = self.proj(tokens).permute(1, 2, 0)  # from T x bs x Ct -> T x bs x C -> bs x C x T 
-
-        bs, C, H, W = out.shape
-        if 'mlp' in self.block:
-            g_sum = self.mlp(v).view(bs, C, H, W)       # bs x C x T -> bs x C x H x W
-
-        if 'attn' in self.block:
-            if self.remove_proj_local:
-                q = out.view(bs, self.num_heads, -1, H*W).transpose(-1, -2)                         # bs x N x HW x C/N
-            else:
-                q = self.q(out).view(bs, self.num_heads, -1, H*W).transpose(-1, -2)                         # bs x N x HW x C/N
-
-            k = self.k(tokens).permute(1, 2, 0).view(bs, self.num_heads, -1, self.token_num)    # from T x bs x Ct -> bs x C x T -> bs x N x C/N x T
-            attn = (q @ k) * self.scale                         # bs x N x HW x T
-
-            attn_out = attn.softmax(dim=-1)                     # bs x N x HW x T
-            
-            vh = v.view(bs, self.num_heads, -1, self.token_num) # bs x N x C/N x T
-            attn_out = (attn_out @ vh.transpose(-1, -2))        # bs x N x HW x C/N
-                                                                # note here k != v
-            g_a = attn_out.transpose(-1, -2).reshape(bs, C, H, W)   # bs x C x HW
-
-            if self.remove_proj_local == False:
-                g_a = self.fuse(g_a)            
-
-            g_sum = g_sum + g_a if 'mlp' in self.block else g_a
-
-        out = out + self.drop_path(g_sum)
-
-        return out
-
-##########################################################################################################
-# Dna Blocks
-##########################################################################################################
-class DnaBlock3(nn.Module):
-    def __init__(
-        self,
-        inp,
-        oup,
-        stride,
-        exp_ratios, #(e1, e2)
-        kernel_size=(3,3),
-        dw_conv='dw',
-        group_num=1,
-        se_flag=[2,0,2,0],
-        hyper_token_id=0,
-        hyper_reduction_ratio=4,
-        token_dim=128,
-        token_num=6,
-        inp_res=49,
-        gbr_type='mlp',
-        gbr_dynamic=[False, False, False],
-        gbr_ffn=False,
-        gbr_before_skip=False,
-        mlp_token_exp=4,
-        norm_pos='post',
-        drop_path_rate=0.,
-        cnn_drop_path_rate=0.,
-        attn_num_heads=2,
-        remove_proj_local=True,
-    ):
-        super(DnaBlock3, self).__init__()
-
-        print(f'block: {inp_res}, cnn-drop {cnn_drop_path_rate:.4f}, mlp-drop {drop_path_rate:.4f}')
-        if isinstance(exp_ratios, tuple):
-            e1, e2 = exp_ratios
-        else:
-            e1, e2 = exp_ratios, 4
-        k1, k2 = kernel_size
-
-        self.stride = stride
-        self.hyper_token_id = hyper_token_id
-
-        self.identity = stride == 1 and inp == oup
-        self.use_conv_alone = False
-        if e1 == 1 or e2 == 0:
-            self.use_conv_alone = True
-            if dw_conv == 'dw':
-                self.conv = nn.Sequential(
-                    # dw
-                    nn.Conv2d(inp, inp*e1, 3, stride, 1, groups=inp, bias=False),
-                    nn.BatchNorm2d(inp*e1),
-                    nn.ReLU6(inplace=True),
-                    ChannelShuffle(inp) if group_num > 1 else nn.Sequential(),
-                    # pw-linear
-                    nn.Conv2d(inp*e1, oup, 1, 1, 0, groups=group_num, bias=False),
-                    nn.BatchNorm2d(oup),
-                )
-            elif dw_conv == 'sepdw':
-                self.conv = nn.Sequential(
-                    # dw
-                    nn.Conv2d(inp, inp*e1//2, (3,1), (stride,1), (1,0), groups=inp, bias=False),
-                    nn.BatchNorm2d(inp*e1//2),
-                    nn.Conv2d(inp*e1//2, inp*e1, (1,3), (1, stride), (0,1), groups=inp*e1//2, bias=False),
-                    nn.BatchNorm2d(inp*e1),
-                    nn.ReLU6(inplace=True),
-                    ChannelShuffle(inp) if group_num > 1 else nn.Sequential(),
-                    # pw-linear
-                    nn.Conv2d(inp*e1, oup, 1, 1, 0, groups=group_num, bias=False),
-                    nn.BatchNorm2d(oup),
-                )
- 
-        else:
-            # conv (dw->pw->dw->pw)
-            self.se_flag = se_flag
-            hidden_dim1 = round(inp * e1)
-            hidden_dim2 = round(oup * e2)
-
-            if dw_conv == 'dw':
-                self.conv1 = nn.Sequential(
-                    nn.Conv2d(inp, hidden_dim1, k1, stride, k1//2, groups=inp, bias=False),
-                    nn.BatchNorm2d(hidden_dim1),
-                    ChannelShuffle(inp) if group_num > 1 else nn.Sequential()
-                )
-            elif dw_conv == 'maxdw':
-                self.conv1 = nn.Sequential(
-                    MaxDepthConv(inp, hidden_dim1, stride),
-                    ChannelShuffle(group_num) if group_num > 1 else nn.Sequential()
-                )
-            elif dw_conv == 'sepdw':
-                self.conv1 = nn.Sequential(
-                    nn.Conv2d(inp, hidden_dim1//2, (3,1), (stride,1), (1,0), groups=inp, bias=False),
-                    nn.BatchNorm2d(hidden_dim1//2),
-                    nn.Conv2d(hidden_dim1//2, hidden_dim1, (1,3), (1, stride), (0,1), groups=hidden_dim1//2, bias=False),
-                    nn.BatchNorm2d(hidden_dim1),
-                    ChannelShuffle(inp) if group_num > 1 else nn.Sequential()
-                )
- 
-            num_func = se_flag[0] 
-            self.act1 = DyReLU(num_func=num_func, scale=2., serelu=True)
-            self.hyper1 = HyperFunc(
-                token_dim, 
-                hidden_dim1 * num_func, 
-                sel_token_id=hyper_token_id, 
-                reduction_ratio=hyper_reduction_ratio
-            ) if se_flag[0] > 0 else nn.Sequential()
-                
-
-            self.conv2 = nn.Sequential(
-                nn.Conv2d(hidden_dim1, oup, 1, 1, 0, groups=group_num, bias=False),
-                nn.BatchNorm2d(oup),
-            )
-            num_func = -1
-            #num_func = 1 if se_flag[1] == 1 else -1 
-            self.act2 = DyReLU(num_func=num_func, scale=2.)
-
-
-            if dw_conv == 'dw':
-                self.conv3 = nn.Sequential(
-                    nn.Conv2d(oup, hidden_dim2, k2, 1, k2//2, groups=oup, bias=False),
-                    nn.BatchNorm2d(hidden_dim2),
-                    ChannelShuffle(oup) if group_num > 1 else nn.Sequential()
-                )
-            elif dw_conv == 'maxdw':
-                self.conv3 = nn.Sequential(
-                    MaxDepthConv(oup, hidden_dim2, 1),
-                )
-            elif dw_conv == 'sepdw':
-                self.conv3 = nn.Sequential(
-                    nn.Conv2d(oup, hidden_dim2//2, (3,1), (1,1), (1,0), groups=oup, bias=False),
-                    nn.BatchNorm2d(hidden_dim2//2),
-                    nn.Conv2d(hidden_dim2//2, hidden_dim2, (1,3), (1, 1), (0,1), groups=hidden_dim2//2, bias=False),
-                    nn.BatchNorm2d(hidden_dim2),
-                    ChannelShuffle(oup) if group_num > 1 else nn.Sequential()
-                )
-           
-            num_func = se_flag[2]
-            self.act3 = DyReLU(num_func=num_func, scale=2., serelu=True)
-            self.hyper3 = HyperFunc(
-                token_dim, 
-                hidden_dim2 * num_func, 
-                sel_token_id=hyper_token_id, 
-                reduction_ratio=hyper_reduction_ratio
-            ) if se_flag[2] > 0 else nn.Sequential()
- 
-
-            self.conv4 = nn.Sequential(
-                nn.Conv2d(hidden_dim2, oup, 1, 1, 0, groups=group_num, bias=False),
-                nn.BatchNorm2d(oup)
-            )
-            num_func = 1 if se_flag[3] == 1 else -1 
-            self.act4 = DyReLU(num_func=num_func, scale=2.)
-            self.hyper4 = HyperFunc(
-                token_dim, 
-                oup * num_func, 
-                sel_token_id=hyper_token_id, 
-                reduction_ratio=hyper_reduction_ratio
-            ) if se_flag[3] > 0 else nn.Sequential()
- 
-
-            self.drop_path = DropPath(cnn_drop_path_rate)
-
-            # l2g, gb, g2l
-            self.local_global = Local2Global(
-                inp,
-                block_type = gbr_type,
-                token_dim=token_dim,
-                token_num=token_num,
-                inp_res=inp_res,
-                use_dynamic = gbr_dynamic[0],
-                norm_pos=norm_pos,
-                drop_path_rate=drop_path_rate,
-                attn_num_heads=attn_num_heads,
-                remove_proj_local=remove_proj_local,
-            )
-
-            self.global_block = GlobalBlock(
-                block_type=gbr_type,
-                token_dim=token_dim,
-                token_num=token_num,
-                mlp_token_exp=mlp_token_exp,
-                use_dynamic = gbr_dynamic[1],
-                use_ffn=gbr_ffn,
-                norm_pos=norm_pos,
-                drop_path_rate=drop_path_rate
-            )
- 
-            oup_res = inp_res // (stride * stride)
-
-            self.global_local = Global2Local(
-                oup,
-                oup_res,
-                block_type=gbr_type,
-                token_dim=token_dim,
-                token_num=token_num,
-                use_dynamic = gbr_dynamic[2],
-                drop_path_rate=drop_path_rate,
-                attn_num_heads=attn_num_heads,
-                remove_proj_local=remove_proj_local,
-            )
-
-    def forward(self, x):
-        features, tokens = x
-        if self.use_conv_alone:
-            out = self.conv(features)
-        else:
-            # step 1: local to global
-            tokens, attn = self.local_global((features, tokens))
-            tokens = self.global_block(tokens)
-
-            # step 2: conv1 + conv2
-            out = self.conv1(features)
-
-            # process attn: mean, downsample if stride > 1, and softmax
-            if self.hyper_token_id == -1:
-                attn = attn.mean(dim=1) # bs x T x H x W
-                if self.stride > 1:
-                    _, _, H, W = out.shape
-                    attn = F.adaptive_avg_pool2d(attn, (H, W))
-                attn = torch.softmax(attn, dim=1)
-
-            if self.se_flag[0] > 0:
-                hp = self.hyper1((tokens, attn))
-                out = self.act1((out, hp))
-            else:
-                out = self.act1(out)
-
-            out = self.conv2(out)
-            out = self.act2(out)
-
-            # step 4: conv3 + conv 4
-            out_cp = out
-            out = self.conv3(out)
-            if self.se_flag[2] > 0:
-                hp = self.hyper3((tokens, attn))
-                out = self.act3((out, hp))
-            else:
-                out = self.act3(out)
-
-            out = self.conv4(out)
-            if self.se_flag[3] > 0:
-                hp = self.hyper4((tokens, attn))
-                out = self.act4((out, hp))
-            else:
-                out = self.act4(out)
-
-            out = self.drop_path(out) + out_cp
-
-            # step 3: global to local
-            out = self.global_local((out, tokens))
-
-        if self.identity:
-            out = out + features
-
-        return (out, tokens)
-
-
-class DnaBlock(nn.Module):
-    def __init__(
-        self,
-        inp,
-        oup,
-        stride,
-        exp_ratios, #(e1, e2)
-        kernel_size=(3,3),
-        dw_conv='dw',
-        group_num=1,
-        se_flag=[2,0,2,0],
-        hyper_token_id=0,
-        hyper_reduction_ratio=4,
-        token_dim=128,
-        token_num=6,
-        inp_res=49,
-        gbr_type='mlp',
-        gbr_dynamic=[False, False, False],
-        gbr_ffn=False,
-        gbr_before_skip=False,
-        mlp_token_exp=4,
-        norm_pos='post',
-        drop_path_rate=0.,
-        cnn_drop_path_rate=0.,
-        attn_num_heads=2,
-        remove_proj_local=True,
-    ):
-        super(DnaBlock, self).__init__()
-
-        print(f'block: {inp_res}, cnn-drop {cnn_drop_path_rate:.4f}, mlp-drop {drop_path_rate:.4f}')
-        if isinstance(exp_ratios, tuple):
-            e1, e2 = exp_ratios
-        else:
-            e1, e2 = exp_ratios, 4
-        k1, k2 = kernel_size
-
-        self.stride = stride
-        self.hyper_token_id = hyper_token_id
-
-        self.gbr_before_skip = gbr_before_skip
-        self.identity = stride == 1 and inp == oup
-        self.use_conv_alone = False
-        if e1 == 1 or e2 == 0:
-            self.use_conv_alone = True
-            self.conv = nn.Sequential(
-                # dw
-                nn.Conv2d(inp, inp*e1, 3, stride, 1, groups=inp, bias=False),
-                nn.BatchNorm2d(inp*e1),
-                nn.ReLU6(inplace=True),
-                ChannelShuffle(inp) if group_num > 1 else nn.Sequential(),
-                # pw-linear
-                nn.Conv2d(inp*e1, oup, 1, 1, 0, groups=group_num, bias=False),
-                nn.BatchNorm2d(oup),
-            )
-        else:
-            # conv (pw->dw->pw)
-            self.se_flag = se_flag
-            hidden_dim = round(inp * e1)
-
-            self.conv1 = nn.Sequential(
-                nn.Conv2d(inp, hidden_dim, 1, 1, 0, groups=group_num, bias=False),
-                nn.BatchNorm2d(hidden_dim),
-                ChannelShuffle(group_num) if group_num > 1 else nn.Sequential()
-            )
-
-            num_func = se_flag[0] 
-            self.act1 = DyReLU(num_func=num_func, scale=2., serelu=True)
-            self.hyper1 = HyperFunc(
-                token_dim, 
-                hidden_dim * num_func, 
-                sel_token_id=hyper_token_id, 
-                reduction_ratio=hyper_reduction_ratio
-            ) if se_flag[0] > 0 else nn.Sequential()
-                
-
-            self.conv2 = nn.Sequential(
-                nn.Conv2d(hidden_dim, hidden_dim, k1, stride, k1//2, groups=hidden_dim, bias=False),
-                nn.BatchNorm2d(hidden_dim),
-            )
-            num_func = se_flag[2] # note here we used index 2 to be consistent with block2
-            self.act2 = DyReLU(num_func=num_func, scale=2., serelu=True)
-            self.hyper2 = HyperFunc(
-                token_dim, 
-                hidden_dim * num_func, 
-                sel_token_id=hyper_token_id, 
-                reduction_ratio=hyper_reduction_ratio
-            ) if se_flag[2] > 0 else nn.Sequential()
- 
-
-            self.conv3 = nn.Sequential(
-                nn.Conv2d(hidden_dim, oup, 1, 1, 0, groups=group_num, bias=False),
-                nn.BatchNorm2d(oup),
-                ChannelShuffle(group_num) if group_num > 1 else nn.Sequential()
-            )
-            num_func = 1 if se_flag[3] == 1 else -1 
-            self.act3 = DyReLU(num_func=num_func, scale=2.)
-            self.hyper3 = HyperFunc(
-                token_dim, 
-                oup * num_func, 
-                sel_token_id=hyper_token_id, 
-                reduction_ratio=hyper_reduction_ratio
-            ) if se_flag[3] > 0 else nn.Sequential()
- 
-
-            self.drop_path = DropPath(cnn_drop_path_rate)
-
-            # l2g, gb, g2l
-            self.local_global = Local2Global(
-                inp,
-                block_type = gbr_type,
-                token_dim=token_dim,
-                token_num=token_num,
-                inp_res=inp_res,
-                use_dynamic = gbr_dynamic[0],
-                norm_pos=norm_pos,
-                drop_path_rate=drop_path_rate,
-                attn_num_heads=attn_num_heads,
-                remove_proj_local=remove_proj_local,
-            )
-
-            self.global_block = GlobalBlock(
-                block_type=gbr_type,
-                token_dim=token_dim,
-                token_num=token_num,
-                mlp_token_exp=mlp_token_exp,
-                use_dynamic = gbr_dynamic[1],
-                use_ffn=gbr_ffn,
-                norm_pos=norm_pos,
-                drop_path_rate=drop_path_rate
-            )
- 
-            oup_res = inp_res // (stride * stride)
-
-            self.global_local = Global2Local(
-                oup,
-                oup_res,
-                block_type=gbr_type,
-                token_dim=token_dim,
-                token_num=token_num,
-                use_dynamic = gbr_dynamic[2],
-                drop_path_rate=drop_path_rate,
-                attn_num_heads=attn_num_heads,
-                remove_proj_local=remove_proj_local,
-            )
-
-    def forward(self, x):
-        features, tokens = x
-        if self.use_conv_alone:
-            out = self.conv(features)
-            if self.identity:
-                out = self.drop_path(out) + features
-
-        else:
-            # step 1: local to global
-            tokens, attn = self.local_global((features, tokens))
-            tokens = self.global_block(tokens)
-
-            # step 2: conv1 + conv2 + conv3
-            out = self.conv1(features)
-
-            # process attn: mean, downsample if stride > 1, and softmax
-            if self.hyper_token_id == -1:
-                attn = attn.mean(dim=1) # bs x T x H x W
-                if self.stride > 1:
-                    _, _, H, W = out.shape
-                    attn = F.adaptive_avg_pool2d(attn, (H, W))
-                attn = torch.softmax(attn, dim=1)
-
-            if self.se_flag[0] > 0:
-                hp = self.hyper1((tokens, attn))
-                out = self.act1((out, hp))
-            else:
-                out = self.act1(out)
-
-            out = self.conv2(out)
-            if self.se_flag[2] > 0:
-                hp = self.hyper2((tokens, attn))
-                out = self.act2((out, hp))
-            else:
-                out = self.act2(out)
-
-            out = self.conv3(out)
-            if self.se_flag[3] > 0:
-                hp = self.hyper3((tokens, attn))
-                out = self.act3((out, hp))
-            else:
-                out = self.act3(out)
-
-            # step 3: global to local and skip
-            if self.gbr_before_skip == True:
-                out = self.global_local((out, tokens))
-                if self.identity:
-                    out = self.drop_path(out) + features
-            else:
-                if self.identity:
-                    out = self.drop_path(out) + features
-                out = self.global_local((out, tokens))
-
-        return (out, tokens)
-
-##########################################################################################################
-# classifier
-##########################################################################################################
-class MergeClassifier(nn.Module):
-    def __init__(
-        self, inp, 
-        oup=1280, 
-        ch_exp=6, 
-        num_classes=num_classes, 
-        drop_rate=0., 
-        drop_branch=[0.0, 0.0],
-        group_num=1, 
-        token_dim=128, 
-        cls_token_num=1, 
-        last_act='relu',
-        hyper_token_id=0,
-        hyper_reduction_ratio=4
-    ):
-        super(MergeClassifier, self).__init__()
-
-        self.drop_branch=drop_branch
-        self.cls_token_num = cls_token_num
-
-        hidden_dim = inp * ch_exp
-        self.conv = nn.Sequential(
-            ChannelShuffle(group_num) if group_num > 1 else nn.Sequential(),
-            nn.Conv2d(inp, hidden_dim, 1, 1, 0, groups=group_num, bias=False),
-            nn.BatchNorm2d(hidden_dim)
+        """
+        x berukuran [b, n, dim].
+        """
+        b, n, _ = x.shape
+
+        # Bagi qkv
+        qkv = self.to_qkv(x).chunk(3, dim=-1)
+        # Perbaikan pattern dengan (h d):
+        q, k, v = map(
+            lambda t: rearrange(
+                t,
+                'b n (h d) -> b h n d',
+                h=self.heads,
+                d=self.dim_head
+            ),
+            qkv
         )
 
-        self.last_act = last_act
-        num_func = 2 if last_act == 'dyrelu' else 0 
-        self.act = DyReLU(num_func=num_func, scale=2.)
- 
-        self.hyper = HyperFunc(
-            token_dim, 
-            hidden_dim * num_func, 
-            sel_token_id=hyper_token_id, 
-            reduction_ratio=hyper_reduction_ratio
-        ) if last_act == 'dyrelu' else nn.Sequential()
- 
-        self.avgpool = nn.Sequential(
-            nn.AdaptiveAvgPool2d((1, 1)),
-            h_swish()
-        )
+        # q@k^T dan penambahan relative bias
+        dots = einsum('b h i d, b h j d -> b h i j', q, k) * self.scale
 
-        if cls_token_num > 0:
-            cat_token_dim = token_dim * cls_token_num 
-        elif cls_token_num == 0:
-            cat_token_dim = token_dim
-        else:
-            cat_token_dim = 0
+        # Potong indeks relatif dan bias sesuai n
+        relative_indices = self.relative_indices[:n, :n]
+        relative_indices = relative_indices.view(1, 1, n, n).expand(b, self.heads, -1, -1).to(x.device)
 
-        self.fc = nn.Sequential(
-            nn.Linear(hidden_dim + cat_token_dim, oup),
-            nn.BatchNorm1d(oup),
-            h_swish()
-        )
+        rel_bias = self.relative_bias.view(1, self.heads, 1, (2 * self.max_len) - 1).expand(b, -1, n, -1)
+        relative_biases = rel_bias.gather(dim=-1, index=relative_indices)
 
-        self.classifier = nn.Sequential(
-           nn.Dropout(drop_rate),
-           nn.Linear(oup, num_classes)
-       )
+        # Tambahkan ke dots
+        dots = dots + relative_biases
+        attn = self.attend(dots)
+        attn = self.dropout_attn(attn)
+
+        # out
+        out = einsum('b h i j, b h j d -> b h i d', attn, v)
+        out = rearrange(out, 'b h n d -> b n (h d)')
+
+        return self.to_out(out)
+
+
+
+
+# inputs: n L C
+# output: n L C
+class Former(nn.Module):
+    def __init__(self, dim, depth=1, heads=2, dim_head=32, dropout=0.3):
+        super(Former, self).__init__()
+        mlp_dim = dim * 2
+        self.layers = nn.ModuleList([])
+        # dim_head = dim // heads
+        for _ in range(depth):
+            self.layers.append(nn.ModuleList([
+                PreNorm(dim, Attention(dim, heads=heads, dim_head=dim_head, dropout=dropout)),
+                PreNorm(dim, FeedForward(dim, mlp_dim, dropout=dropout))
+            ]))
 
     def forward(self, x):
-        features, tokens = x
-
-        x = self.conv(features)
-
-        if self.last_act == 'dyrelu':
-            hp = self.hyper(tokens)
-            x = self.act((x, hp))
-        else:
-            x = self.act(x)
-
-
-        x = self.avgpool(x)
-        x = x.view(x.size(0), -1)
-
-        ps = [x]
-        
-        if self.cls_token_num == 0:
-            avg_token = torch.mean(F.relu6(tokens), dim=0)
-            ps.append(avg_token)
-        elif self.cls_token_num < 0:
-            pass
-        else:
-            for i in range(self.cls_token_num):
-                ps.append(tokens[i])
-
-        # drop branch
-        if self.training and self.drop_branch[0] + self.drop_branch[1] > 1e-8:
-            rd = torch.rand((x.shape[0], 1), dtype=x.dtype, device=x.device)
-            keep_local = 1 - self.drop_branch[0]
-            keep_global = 1 - self.drop_branch[1]
-            rd_local = (keep_local + rd).floor_()
-            rd_global = -((rd - keep_global).floor_())
-            ps[0] = ps[0].div(keep_local) * rd_local
-            ps[1] = ps[1].div(keep_global) * rd_global
-
-        x = torch.cat(ps, dim=1)
-        x = self.fc(x)
-
-        x = self.classifier(x)
+        for attn, ff in self.layers:
+            x = attn(x) + x
+            x = ff(x) + x
         return x
 
 
-""" Model creation / weight loading / state_dict helpers
-
-Hacked together by / Copyright 2020 Ross Wightman
-"""
-import logging
-import os
-import math
-from collections import OrderedDict
-from copy import deepcopy
-from typing import Any, Callable, Optional, Tuple
-
 import torch
-import torch.nn as nn
-
-
-from timm.models.features import FeatureListNet, FeatureDictNet, FeatureHookNet
-from timm.models.hub import has_hf_hub, download_cached_file, load_state_dict_from_hf
-from torch.hub import load_state_dict_from_url
-from timm.models.layers import Conv2dSame, Linear
-
-
-_logger = logging.getLogger(__name__)
-
-
-def load_state_dict(checkpoint_path, use_ema=False):
-    if checkpoint_path and os.path.isfile(checkpoint_path):
-        checkpoint = torch.load(checkpoint_path, map_location='cpu')
-        state_dict_key = 'state_dict'
-        if isinstance(checkpoint, dict):
-            if use_ema and 'state_dict_ema' in checkpoint:
-                state_dict_key = 'state_dict_ema'
-        if state_dict_key and state_dict_key in checkpoint:
-            new_state_dict = OrderedDict()
-            for k, v in checkpoint[state_dict_key].items():
-                # strip `module.` prefix
-                name = k[7:] if k.startswith('module') else k
-                new_state_dict[name] = v
-            state_dict = new_state_dict
-        else:
-            state_dict = checkpoint
-        _logger.info("Loaded {} from checkpoint '{}'".format(state_dict_key, checkpoint_path))
-        return state_dict
-    else:
-        _logger.error("No checkpoint found at '{}'".format(checkpoint_path))
-        raise FileNotFoundError()
-
-
-def load_checkpoint(model, checkpoint_path, use_ema=False, strict=True):
-    state_dict = load_state_dict(checkpoint_path, use_ema)
-    model.load_state_dict(state_dict, strict=strict)
-
-
-def resume_checkpoint(model, checkpoint_path, optimizer=None, loss_scaler=None, log_info=True):
-    resume_epoch = None
-    if os.path.isfile(checkpoint_path):
-        checkpoint = torch.load(checkpoint_path, map_location='cpu')
-        if isinstance(checkpoint, dict) and 'state_dict' in checkpoint:
-            if log_info:
-                _logger.info('Restoring model state from checkpoint...')
-            new_state_dict = OrderedDict()
-            for k, v in checkpoint['state_dict'].items():
-                name = k[7:] if k.startswith('module') else k
-                new_state_dict[name] = v
-            model.load_state_dict(new_state_dict)
-
-            if optimizer is not None and 'optimizer' in checkpoint:
-                if log_info:
-                    _logger.info('Restoring optimizer state from checkpoint...')
-                optimizer.load_state_dict(checkpoint['optimizer'])
-
-            if loss_scaler is not None and loss_scaler.state_dict_key in checkpoint:
-                if log_info:
-                    _logger.info('Restoring AMP loss scaler state from checkpoint...')
-                loss_scaler.load_state_dict(checkpoint[loss_scaler.state_dict_key])
-
-            if 'epoch' in checkpoint:
-                resume_epoch = checkpoint['epoch']
-                if 'version' in checkpoint and checkpoint['version'] > 1:
-                    resume_epoch += 1  # start at the next epoch, old checkpoints incremented before save
-
-            if log_info:
-                _logger.info("Loaded checkpoint '{}' (epoch {})".format(checkpoint_path, checkpoint['epoch']))
-        else:
-            model.load_state_dict(checkpoint)
-            if log_info:
-                _logger.info("Loaded checkpoint '{}'".format(checkpoint_path))
-        return resume_epoch
-    else:
-        _logger.error("No checkpoint found at '{}'".format(checkpoint_path))
-        raise FileNotFoundError()
-
-
-def load_custom_pretrained(model, default_cfg=None, load_fn=None, progress=False, check_hash=False):
-    r"""Loads a custom (read non .pth) weight file
-
-    Downloads checkpoint file into cache-dir like torch.hub based loaders, but calls
-    a passed in custom load fun, or the `load_pretrained` model member fn.
-
-    If the object is already present in `model_dir`, it's deserialized and returned.
-    The default value of `model_dir` is ``<hub_dir>/checkpoints`` where
-    `hub_dir` is the directory returned by :func:`~torch.hub.get_dir`.
-
-    Args:
-        model: The instantiated model to load weights into
-        default_cfg (dict): Default pretrained model cfg
-        load_fn: An external stand alone fn that loads weights into provided model, otherwise a fn named
-            'laod_pretrained' on the model will be called if it exists
-        progress (bool, optional): whether or not to display a progress bar to stderr. Default: False
-        check_hash(bool, optional): If True, the filename part of the URL should follow the naming convention
-            ``filename-<sha256>.ext`` where ``<sha256>`` is the first eight or more
-            digits of the SHA256 hash of the contents of the file. The hash is used to
-            ensure unique names and to verify the contents of the file. Default: False
-    """
-    default_cfg = default_cfg or getattr(model, 'default_cfg', None) or {}
-    pretrained_url = default_cfg.get('url', None)
-    if not pretrained_url:
-        _logger.warning("No pretrained weights exist for this model. Using random initialization.")
-        return
-    cached_file = download_cached_file(default_cfg['url'], check_hash=check_hash, progress=progress)
-
-    if load_fn is not None:
-        load_fn(model, cached_file)
-    elif hasattr(model, 'load_pretrained'):
-        model.load_pretrained(cached_file)
-    else:
-        _logger.warning("Valid function to load pretrained weights is not available, using random initialization.")
-
-
-def adapt_input_conv(in_chans, conv_weight):
-    conv_type = conv_weight.dtype
-    conv_weight = conv_weight.float()  # Some weights are in torch.half, ensure it's float for sum on CPU
-    O, I, J, K = conv_weight.shape
-    if in_chans == 1:
-        if I > 3:
-            assert conv_weight.shape[1] % 3 == 0
-            # For models with space2depth stems
-            conv_weight = conv_weight.reshape(O, I // 3, 3, J, K)
-            conv_weight = conv_weight.sum(dim=2, keepdim=False)
-        else:
-            conv_weight = conv_weight.sum(dim=1, keepdim=True)
-    elif in_chans != 3:
-        if I != 3:
-            raise NotImplementedError('Weight format not supported by conversion.')
-        else:
-            # NOTE this strategy should be better than random init, but there could be other combinations of
-            # the original RGB input layer weights that'd work better for specific cases.
-            repeat = int(math.ceil(in_chans / 3))
-            conv_weight = conv_weight.repeat(1, repeat, 1, 1)[:, :in_chans, :, :]
-            conv_weight *= (3 / float(in_chans))
-    conv_weight = conv_weight.to(conv_type)
-    return conv_weight
-
-
-def load_pretrained(model, default_cfg=None, num_classes=num_classes, in_chans=3, filter_fn=None, strict=True, progress=False):
-    """ Load pretrained checkpoint
-
-    Args:
-        model (nn.Module) : PyTorch model module
-        default_cfg (Optional[Dict]): default configuration for pretrained weights / target dataset
-        num_classes (int): num_classes for model
-        in_chans (int): in_chans for model
-        filter_fn (Optional[Callable]): state_dict filter fn for load (takes state_dict, model as args)
-        strict (bool): strict load of checkpoint
-        progress (bool): enable progress bar for weight download
-
-    """
-    default_cfg = default_cfg or getattr(model, 'default_cfg', None) or {}
-    pretrained_url = default_cfg.get('url', None)
-    hf_hub_id = default_cfg.get('hf_hub', None)
-    if not pretrained_url and not hf_hub_id:
-        _logger.warning("No pretrained weights exist for this model. Using random initialization.")
-        return
-    if hf_hub_id and has_hf_hub(necessary=not pretrained_url):
-        _logger.info(f'Loading pretrained weights from Hugging Face hub ({hf_hub_id})')
-        state_dict = load_state_dict_from_hf(hf_hub_id)
-    else:
-        _logger.info(f'Loading pretrained weights from url ({pretrained_url})')
-        state_dict = load_state_dict_from_url(pretrained_url, progress=progress, map_location='cpu')
-    if filter_fn is not None:
-        # for backwards compat with filter fn that take one arg, try one first, the two
-        try:
-            state_dict = filter_fn(state_dict)
-        except TypeError:
-            state_dict = filter_fn(state_dict, model)
-
-    input_convs = default_cfg.get('first_conv', None)
-    if input_convs is not None and in_chans != 3:
-        if isinstance(input_convs, str):
-            input_convs = (input_convs,)
-        for input_conv_name in input_convs:
-            weight_name = input_conv_name + '.weight'
-            try:
-                state_dict[weight_name] = adapt_input_conv(in_chans, state_dict[weight_name])
-                _logger.info(
-                    f'Converted input conv {input_conv_name} pretrained weights from 3 to {in_chans} channel(s)')
-            except NotImplementedError as e:
-                del state_dict[weight_name]
-                strict = False
-                _logger.warning(
-                    f'Unable to convert pretrained {input_conv_name} weights, using random init for this layer.')
-
-    classifiers = default_cfg.get('classifier', None)
-    label_offset = default_cfg.get('label_offset', 0)
-    if classifiers is not None:
-        if isinstance(classifiers, str):
-            classifiers = (classifiers,)
-        if num_classes != default_cfg['num_classes']:
-            for classifier_name in classifiers:
-                # completely discard fully connected if model num_classes doesn't match pretrained weights
-                del state_dict[classifier_name + '.weight']
-                del state_dict[classifier_name + '.bias']
-            strict = False
-        elif label_offset > 0:
-            for classifier_name in classifiers:
-                # special case for pretrained weights with an extra background class in pretrained weights
-                classifier_weight = state_dict[classifier_name + '.weight']
-                state_dict[classifier_name + '.weight'] = classifier_weight[label_offset:]
-                classifier_bias = state_dict[classifier_name + '.bias']
-                state_dict[classifier_name + '.bias'] = classifier_bias[label_offset:]
-
-    model.load_state_dict(state_dict, strict=strict)
-
-
-def extract_layer(model, layer):
-    layer = layer.split('.')
-    module = model
-    if hasattr(model, 'module') and layer[0] != 'module':
-        module = model.module
-    if not hasattr(model, 'module') and layer[0] == 'module':
-        layer = layer[1:]
-    for l in layer:
-        if hasattr(module, l):
-            if not l.isdigit():
-                module = getattr(module, l)
-            else:
-                module = module[int(l)]
-        else:
-            return module
-    return module
-
-
-def set_layer(model, layer, val):
-    layer = layer.split('.')
-    module = model
-    if hasattr(model, 'module') and layer[0] != 'module':
-        module = model.module
-    lst_index = 0
-    module2 = module
-    for l in layer:
-        if hasattr(module2, l):
-            if not l.isdigit():
-                module2 = getattr(module2, l)
-            else:
-                module2 = module2[int(l)]
-            lst_index += 1
-    lst_index -= 1
-    for l in layer[:lst_index]:
-        if not l.isdigit():
-            module = getattr(module, l)
-        else:
-            module = module[int(l)]
-    l = layer[lst_index]
-    setattr(module, l, val)
-
-
-def adapt_model_from_string(parent_module, model_string):
-    separator = '***'
-    state_dict = {}
-    lst_shape = model_string.split(separator)
-    for k in lst_shape:
-        k = k.split(':')
-        key = k[0]
-        shape = k[1][1:-1].split(',')
-        if shape[0] != '':
-            state_dict[key] = [int(i) for i in shape]
-
-    new_module = deepcopy(parent_module)
-    for n, m in parent_module.named_modules():
-        old_module = extract_layer(parent_module, n)
-        if isinstance(old_module, nn.Conv2d) or isinstance(old_module, Conv2dSame):
-            if isinstance(old_module, Conv2dSame):
-                conv = Conv2dSame
-            else:
-                conv = nn.Conv2d
-            s = state_dict[n + '.weight']
-            in_channels = s[1]
-            out_channels = s[0]
-            g = 1
-            if old_module.groups > 1:
-                in_channels = out_channels
-                g = in_channels
-            new_conv = conv(
-                in_channels=in_channels, out_channels=out_channels, kernel_size=old_module.kernel_size,
-                bias=old_module.bias is not None, padding=old_module.padding, dilation=old_module.dilation,
-                groups=g, stride=old_module.stride)
-            set_layer(new_module, n, new_conv)
-        if isinstance(old_module, nn.BatchNorm2d):
-            new_bn = nn.BatchNorm2d(
-                num_features=state_dict[n + '.weight'][0], eps=old_module.eps, momentum=old_module.momentum,
-                affine=old_module.affine, track_running_stats=True)
-            set_layer(new_module, n, new_bn)
-        if isinstance(old_module, nn.Linear):
-            # FIXME extra checks to ensure this is actually the FC classifier layer and not a diff Linear layer?
-            num_features = state_dict[n + '.weight'][1]
-            new_fc = Linear(
-                in_features=num_features, out_features=old_module.out_features, bias=old_module.bias is not None)
-            set_layer(new_module, n, new_fc)
-            if hasattr(new_module, 'num_features'):
-                new_module.num_features = num_features
-    new_module.eval()
-    parent_module.eval()
-
-    return new_module
-
-
-def adapt_model_from_file(parent_module, model_variant):
-    adapt_file = os.path.join(os.path.dirname(__file__), 'pruned', model_variant + '.txt')
-    with open(adapt_file, 'r') as f:
-        return adapt_model_from_string(parent_module, f.read().strip())
-
-
-def default_cfg_for_features(default_cfg):
-    default_cfg = deepcopy(default_cfg)
-    # remove default pretrained cfg fields that don't have much relevance for feature backbone
-    to_remove = ('num_classes', 'crop_pct', 'classifier', 'global_pool')  # add default final pool size?
-    for tr in to_remove:
-        default_cfg.pop(tr, None)
-    return default_cfg
-
-
-def overlay_external_default_cfg(default_cfg, kwargs):
-    """ Overlay 'external_default_cfg' in kwargs on top of default_cfg arg.
-    """
-    external_default_cfg = kwargs.pop('external_default_cfg', None)
-    if external_default_cfg:
-        default_cfg.pop('url', None)  # url should come from external cfg
-        default_cfg.pop('hf_hub', None)  # hf hub id should come from external cfg
-        default_cfg.update(external_default_cfg)
-
-
-def set_default_kwargs(kwargs, names, default_cfg):
-    for n in names:
-        # for legacy reasons, model __init__args uses img_size + in_chans as separate args while
-        # default_cfg has one input_size=(C, H ,W) entry
-        if n == 'img_size':
-            input_size = default_cfg.get('input_size', None)
-            if input_size is not None:
-                assert len(input_size) == 3
-                kwargs.setdefault(n, input_size[-2:])
-        elif n == 'in_chans':
-            input_size = default_cfg.get('input_size', None)
-            if input_size is not None:
-                assert len(input_size) == 3
-                kwargs.setdefault(n, input_size[0])
-        else:
-            default_val = default_cfg.get(n, None)
-            if default_val is not None:
-                kwargs.setdefault(n, default_cfg[n])
-
-
-def filter_kwargs(kwargs, names):
-    if not kwargs or not names:
-        return
-    for n in names:
-        kwargs.pop(n, None)
-
-
-def update_default_cfg_and_kwargs(default_cfg, kwargs, kwargs_filter):
-    """ Update the default_cfg and kwargs before passing to model
-
-    FIXME this sequence of overlay default_cfg, set default kwargs, filter kwargs
-    could/should be replaced by an improved configuration mechanism
-
-    Args:
-        default_cfg: input default_cfg (updated in-place)
-        kwargs: keyword args passed to model build fn (updated in-place)
-        kwargs_filter: keyword arg keys that must be removed before model __init__
-    """
-    # Overlay default cfg values from `external_default_cfg` if it exists in kwargs
-    overlay_external_default_cfg(default_cfg, kwargs)
-    # Set model __init__ args that can be determined by default_cfg (if not already passed as kwargs)
-    default_kwarg_names = ('num_classes', 'global_pool', 'in_chans')
-    if default_cfg.get('fixed_input_size', False):
-        # if fixed_input_size exists and is True, model takes an img_size arg that fixes its input size
-        default_kwarg_names += ('img_size',)
-    set_default_kwargs(kwargs, names=default_kwarg_names, default_cfg=default_cfg)
-    # Filter keyword args for task specific model variants (some 'features only' models, etc.)
-    filter_kwargs(kwargs, names=kwargs_filter)
-
-
-def build_model_with_cfg(
-        model_cls: Callable,
-        variant: str,
-        pretrained: bool,
-        default_cfg: dict,
-        model_cfg: Optional[Any] = None,
-        feature_cfg: Optional[dict] = None,
-        pretrained_strict: bool = True,
-        pretrained_filter_fn: Optional[Callable] = None,
-        pretrained_custom_load: bool = False,
-        kwargs_filter: Optional[Tuple[str]] = None,
-        **kwargs):
-    """ Build model with specified default_cfg and optional model_cfg
-
-    This helper fn aids in the construction of a model including:
-      * handling default_cfg and associated pretained weight loading
-      * passing through optional model_cfg for models with config based arch spec
-      * features_only model adaptation
-      * pruning config / model adaptation
-
-    Args:
-        model_cls (nn.Module): model class
-        variant (str): model variant name
-        pretrained (bool): load pretrained weights
-        default_cfg (dict): model's default pretrained/task config
-        model_cfg (Optional[Dict]): model's architecture config
-        feature_cfg (Optional[Dict]: feature extraction adapter config
-        pretrained_strict (bool): load pretrained weights strictly
-        pretrained_filter_fn (Optional[Callable]): filter callable for pretrained weights
-        pretrained_custom_load (bool): use custom load fn, to load numpy or other non PyTorch weights
-        kwargs_filter (Optional[Tuple]): kwargs to filter before passing to model
-        **kwargs: model args passed through to model __init__
-    """
-    pruned = kwargs.pop('pruned', False)
-    features = False
-    feature_cfg = feature_cfg or {}
-    default_cfg = deepcopy(default_cfg) if default_cfg else {}
-    update_default_cfg_and_kwargs(default_cfg, kwargs, kwargs_filter)
-    default_cfg.setdefault('architecture', variant)
-
-    # Setup for feature extraction wrapper done at end of this fn
-    if kwargs.pop('features_only', False):
-        features = True
-        feature_cfg.setdefault('out_indices', (0, 1, 2, 3, 4))
-        if 'out_indices' in kwargs:
-            feature_cfg['out_indices'] = kwargs.pop('out_indices')
-
-    # Build the model
-    model = model_cls(**kwargs) if model_cfg is None else model_cls(cfg=model_cfg, **kwargs)
-    model.default_cfg = default_cfg
-    
-    if pruned:
-        model = adapt_model_from_file(model, variant)
-
-    # For classification models, check class attr, then kwargs, then default to 1k, otherwise 0 for feats
-    num_classes_pretrained = 0 if features else getattr(model, 'num_classes', kwargs.get('num_classes', num_classes))
-    if pretrained:
-        if pretrained_custom_load:
-            load_custom_pretrained(model)
-        else:
-            load_pretrained(
-                model,
-                num_classes=num_classes_pretrained,
-                in_chans=kwargs.get('in_chans', 3),
-                filter_fn=pretrained_filter_fn,
-                strict=pretrained_strict)
-
-    # Wrap the model in a feature extraction module if enabled
-    if features:
-        feature_cls = FeatureListNet
-        if 'feature_cls' in feature_cfg:
-            feature_cls = feature_cfg.pop('feature_cls')
-            if isinstance(feature_cls, str):
-                feature_cls = feature_cls.lower()
-                if 'hook' in feature_cls:
-                    feature_cls = FeatureHookNet
-                else:
-                    assert False, f'Unknown feature class {feature_cls}'
-        model = feature_cls(model, **feature_cfg)
-        model.default_cfg = default_cfg_for_features(default_cfg)  # add back default_cfg
-    
-    return model
-
-
-def model_parameters(model, exclude_head=False):
-    if exclude_head:
-        # FIXME this a bit of a quick and dirty hack to skip classifier head params based on ordering
-        return [p for p in model.parameters()][:-2]
-    else:
-        return model.parameters()
-
-
-
-""" Model Registry
-Hacked together by / Copyright 2020 Ross Wightman
-"""
-
-import sys
-import re
-import fnmatch
-from collections import defaultdict
-from copy import deepcopy
-
-__all__ = ['list_models', 'is_model', 'model_entrypoint', 'list_modules', 'is_model_in_modules',
-           'is_model_default_key', 'has_model_default_key', 'get_model_default_value', 'is_model_pretrained']
-
-_module_to_models = defaultdict(set)  # dict of sets to check membership of model in module
-_model_to_module = {}  # mapping of model names to module names
-_model_entrypoints = {}  # mapping of model names to entrypoint fns
-_model_has_pretrained = set()  # set of model names that have pretrained weight url present
-_model_default_cfgs = dict()  # central repo for model default_cfgs
-
-
-def register_model(fn):
-    # lookup containing module
-    mod = sys.modules[fn.__module__]
-    module_name_split = fn.__module__.split('.')
-    module_name = module_name_split[-1] if len(module_name_split) else ''
-
-    # add model to __all__ in module
-    model_name = fn.__name__
-    if hasattr(mod, '__all__'):
-        mod.__all__.append(model_name)
-    else:
-        mod.__all__ = [model_name]
-
-    # add entries to registry dict/sets
-    _model_entrypoints[model_name] = fn
-    _model_to_module[model_name] = module_name
-    _module_to_models[module_name].add(model_name)
-    has_pretrained = False  # check if model has a pretrained url to allow filtering on this
-    if hasattr(mod, 'default_cfgs') and model_name in mod.default_cfgs:
-        # this will catch all models that have entrypoint matching cfg key, but miss any aliasing
-        # entrypoints or non-matching combos
-        has_pretrained = 'url' in mod.default_cfgs[model_name] and 'http' in mod.default_cfgs[model_name]['url']
-        _model_default_cfgs[model_name] = deepcopy(mod.default_cfgs[model_name])
-    if has_pretrained:
-        _model_has_pretrained.add(model_name)
-    return fn
-
-
-def _natural_key(string_):
-    return [int(s) if s.isdigit() else s for s in re.split(r'(\d+)', string_.lower())]
-
-
-def list_models(filter='', module='', pretrained=False, exclude_filters='', name_matches_cfg=False):
-    """ Return list of available model names, sorted alphabetically
-
-    Args:
-        filter (str) - Wildcard filter string that works with fnmatch
-        module (str) - Limit model selection to a specific sub-module (ie 'gen_efficientnet')
-        pretrained (bool) - Include only models with pretrained weights if True
-        exclude_filters (str or list[str]) - Wildcard filters to exclude models after including them with filter
-        name_matches_cfg (bool) - Include only models w/ model_name matching default_cfg name (excludes some aliases)
-
-    Example:
-        model_list('gluon_resnet*') -- returns all models starting with 'gluon_resnet'
-        model_list('*resnext*, 'resnet') -- returns all models with 'resnext' in 'resnet' module
-    """
-    if module:
-        models = list(_module_to_models[module])
-    else:
-        models = _model_entrypoints.keys()
-    if filter:
-        models = fnmatch.filter(models, filter)  # include these models
-    if exclude_filters:
-        if not isinstance(exclude_filters, (tuple, list)):
-            exclude_filters = [exclude_filters]
-        for xf in exclude_filters:
-            exclude_models = fnmatch.filter(models, xf)  # exclude these models
-            if len(exclude_models):
-                models = set(models).difference(exclude_models)
-    if pretrained:
-        models = _model_has_pretrained.intersection(models)
-    if name_matches_cfg:
-        models = set(_model_default_cfgs).intersection(models)
-    return list(sorted(models, key=_natural_key))
-
-
-def is_model(model_name):
-    """ Check if a model name exists
-    """
-    return model_name in _model_entrypoints
-
-
-def model_entrypoint(model_name):
-    """Fetch a model entrypoint for specified model name
-    """
-    return _model_entrypoints[model_name]
-
-
-def list_modules():
-    """ Return list of module names that contain models / model entrypoints
-    """
-    modules = _module_to_models.keys()
-    return list(sorted(modules))
-
-
-def is_model_in_modules(model_name, module_names):
-    """Check if a model exists within a subset of modules
-    Args:
-        model_name (str) - name of model to check
-        module_names (tuple, list, set) - names of modules to search in
-    """
-    assert isinstance(module_names, (tuple, list, set))
-    return any(model_name in _module_to_models[n] for n in module_names)
-
-
-def has_model_default_key(model_name, cfg_key):
-    """ Query model default_cfgs for existence of a specific key.
-    """
-    if model_name in _model_default_cfgs and cfg_key in _model_default_cfgs[model_name]:
-        return True
-    return False
-
-
-def is_model_default_key(model_name, cfg_key):
-    """ Return truthy value for specified model default_cfg key, False if does not exist.
-    """
-    if model_name in _model_default_cfgs and _model_default_cfgs[model_name].get(cfg_key, False):
-        return True
-    return False
-
-
-def get_model_default_value(model_name, cfg_key):
-    """ Get a specific model default_cfg value by key. None if it doesn't exist.
-    """
-    if model_name in _model_default_cfgs:
-        return _model_default_cfgs[model_name].get(cfg_key, None)
-    else:
-        return None
-
-
-def is_model_pretrained(model_name):
-    return model_name in _model_has_pretrained
-
-
-"""Modification V1
-
-A PyTorch impl of Modification-V1.
- 
-Paper: Modification: Bridging MobileNet and Transformer (CVPR 2022)
-       https://arxiv.org/abs/2108.05895
-
-"""
-
-import torch
-import torch.nn as nn
-import torch.nn.functional as F
-import math
-
-from timm.data import IMAGENET_DEFAULT_MEAN, IMAGENET_DEFAULT_STD, IMAGENET_INCEPTION_MEAN, IMAGENET_INCEPTION_STD
-
-__all__ = ['Modification']
-  
-def _cfg(url='', **kwargs):
-    return {
-        'url': url, 'num_classes': num_classes, 'input_size': (3, 224, 224), 'pool_size': (1, 1),
-        'crop_pct': 0.875, 'interpolation': 'bilinear',
-        'mean': IMAGENET_DEFAULT_MEAN, 'std': IMAGENET_DEFAULT_STD,
-        'first_conv': 'conv_stem', 'classifier': 'classifier',
-        **kwargs
-    }
-
-default_cfgs = {
-    'default': _cfg(url=''),
+from torch import nn, einsum
+from einops import rearrange
+
+
+# inputs: x(b c h w) z(b m d)
+# output: z(b m d)
+class Mobile2Former(nn.Module):
+    def __init__(self, dim, heads, channel, dropout=0.):
+        super(Mobile2Former, self).__init__()
+        inner_dim = heads * channel
+        self.heads = heads
+        self.to_q = nn.Linear(dim, inner_dim)
+        self.attend = nn.Softmax(dim=-1)
+        self.scale = channel ** -0.5
+        self.to_out = nn.Sequential(
+            nn.Linear(inner_dim, dim),
+            nn.Dropout(dropout)
+        )
+
+    def forward(self, x, z):
+        b, m, d = z.shape
+        b, c, h, w = x.shape
+        x =  x.reshape(b, c, h*w).transpose(1,2).unsqueeze(1)
+        q = self.to_q(z).view(b, self.heads, m, c)
+        dots = q @ x.transpose(2, 3) * self.scale
+        attn = self.attend(dots)
+        out = attn @ x
+        out = rearrange(out, 'b h m c -> b m (h c)')
+        return z + self.to_out(out)
+
+
+# inputs: x(b c h w) z(b m d)
+# output: x(b c h w)
+class Former2Mobile(nn.Module):
+    def __init__(self, dim, heads, channel, dropout=0.):
+        super(Former2Mobile, self).__init__()
+        inner_dim = heads * channel
+        self.heads = heads
+        self.to_k = nn.Linear(dim, inner_dim)
+        self.to_v = nn.Linear(dim, inner_dim)
+        self.attend = nn.Softmax(dim=-1)
+        self.scale = channel ** -0.5
+
+        self.to_out = nn.Sequential(
+            nn.Linear(inner_dim, channel),
+            nn.Dropout(dropout)
+        )
+
+    def forward(self, x, z):
+        b, m, d = z.shape
+        b, c, h, w = x.shape
+        q =  x.reshape(b, c, h*w).transpose(1,2).unsqueeze(1)
+        k = self.to_k(z).view(b, self.heads, m, c)
+        v = self.to_v(z).view(b, self.heads, m, c)
+        dots = q @ k.transpose(2, 3) * self.scale
+        attn = self.attend(dots)
+        out = attn @ v
+        out = rearrange(out, 'b h l c -> b l (h c)')
+        out = self.to_out(out)
+        out = out.view(b, c, h, w)
+        return x + out
+
+config_52 = {
+    'name': 'mf52',
+    'token': 3,  # num tokens
+    'embed': 128,  # embed dim
+    'stem': 8,
+    'bneck': {'e': 24, 'o': 12, 's': 2},  # exp out stride
+    'body': [
+        # stage2
+        {'inp': 12, 'exp': 36, 'out': 12, 'se': None, 'stride': 1, 'heads': 2},
+        # stage3
+        {'inp': 12, 'exp': 72, 'out': 24, 'se': None, 'stride': 2, 'heads': 2},
+        {'inp': 24, 'exp': 72, 'out': 24, 'se': None, 'stride': 1, 'heads': 2},
+        # stage4
+        {'inp': 24, 'exp': 144, 'out': 48, 'se': None, 'stride': 2, 'heads': 2},
+        {'inp': 48, 'exp': 192, 'out': 48, 'se': None, 'stride': 1, 'heads': 2},
+        {'inp': 48, 'exp': 288, 'out': 64, 'se': None, 'stride': 1, 'heads': 2},
+        # stage5
+        {'inp': 64, 'exp': 384, 'out': 96, 'se': None, 'stride': 2, 'heads': 2},
+        {'inp': 96, 'exp': 576, 'out': 96, 'se': None, 'stride': 1, 'heads': 2},
+    ],
+    'fc1': 1024,  # hid_layer
+    'fc2': num_classes  # num_clasess
+    ,
 }
 
-class Modification(nn.Module):
-    def __init__(
-        self,
-        block_args,
-        num_classes=num_classes,
-        img_size=224,
-        width_mult=1.,
-        in_chans=3,
-        stem_chs=16,
-        num_features=1280,
-        dw_conv='dw',
-        kernel_size=(3,3),
-        cnn_exp=(6,4),
-        group_num=1,
-        se_flag=[2,0,2,0],
-        hyper_token_id=0,
-        hyper_reduction_ratio=4,
-        token_dim=128,
-        token_num=6,
-        cls_token_num=1,
-        last_act='relu',
-        last_exp=6,
-        gbr_type='mlp',
-        gbr_dynamic=[False, False, False],
-        gbr_norm='post',
-        gbr_ffn=False,
-        gbr_before_skip=False,
-        gbr_drop=[0.0, 0.0],
-        mlp_token_exp=4,
-        drop_rate=0.,
-        drop_path_rate=0.,
-        cnn_drop_path_rate=0.,
-        attn_num_heads = 2,
-        remove_proj_local=True,
-        ):
+config_294 = {
+    'name': 'mf294',
+    'token': 6,  # tokens
+    'embed': 192,  # embed_dim
+    'stem': 16,
+    # stage1
+    'bneck': {'e': 32, 'o': 16, 's': 1},  # exp out stride
+    'body': [
+        # stage2
+        {'inp': 16, 'exp': 96, 'out': 24, 'se': None, 'stride': 2, 'heads': 2},
+        {'inp': 24, 'exp': 96, 'out': 24, 'se': None, 'stride': 1, 'heads': 2},
+        # stage3
+        {'inp': 24, 'exp': 144, 'out': 48, 'se': None, 'stride': 2, 'heads': 2},
+        {'inp': 48, 'exp': 192, 'out': 48, 'se': None, 'stride': 1, 'heads': 2},
+        # stage4
+        {'inp': 48, 'exp': 288, 'out': 96, 'se': None, 'stride': 2, 'heads': 2},
+        {'inp': 96, 'exp': 384, 'out': 96, 'se': None, 'stride': 1, 'heads': 2},
+        {'inp': 96, 'exp': 576, 'out': 128, 'se': None, 'stride': 1, 'heads': 2},
+        {'inp': 128, 'exp': 768, 'out': 128, 'se': None, 'stride': 1, 'heads': 2},
+        # stage5
+        {'inp': 128, 'exp': 768, 'out': 192, 'se': None, 'stride': 2, 'heads': 2},
+        {'inp': 192, 'exp': 1152, 'out': 192, 'se': None, 'stride': 1, 'heads': 2},
+        {'inp': 192, 'exp': 1152, 'out': 192, 'se': None, 'stride': 1, 'heads': 2},
+    ],
+    'fc1': 1920,  # hid_layer
+    'fc2': num_classes  # num_clasess
+    ,
+}
 
-        super(Modification, self).__init__()
+config_508 = {
+    'name': 'mf508',
+    'token': 6,  # tokens and embed_dim
+    'embed': 192,
+    'stem': 24,
+    'bneck': {'e': 48, 'o': 24, 's': 1},
+    'body': [
+        {'inp': 24, 'exp': 144, 'out': 40, 'se': None, 'stride': 2, 'heads': 2},
+        {'inp': 40, 'exp': 120, 'out': 40, 'se': None, 'stride': 1, 'heads': 2},
 
-        cnn_drop_path_rate = drop_path_rate
-        mdiv = 8 if width_mult > 1.01 else 4
-        self.num_classes = num_classes
+        {'inp': 40, 'exp': 240, 'out': 72, 'se': None, 'stride': 2, 'heads': 2},
+        {'inp': 72, 'exp': 216, 'out': 72, 'se': None, 'stride': 1, 'heads': 2},
 
-        #global tokens
-        self.tokens = nn.Embedding(token_num, token_dim) 
+        {'inp': 72, 'exp': 432, 'out': 128, 'se': None, 'stride': 2, 'heads': 2},
+        {'inp': 128, 'exp': 512, 'out': 128, 'se': None, 'stride': 1, 'heads': 2},
+        {'inp': 128, 'exp': 768, 'out': 176, 'se': None, 'stride': 1, 'heads': 2},
+        {'inp': 176, 'exp': 1056, 'out': 176, 'se': None, 'stride': 1, 'heads': 2},
 
-        # Stem
+        {'inp': 176, 'exp': 1056, 'out': 240, 'se': None, 'stride': 2, 'heads': 2},
+        {'inp': 240, 'exp': 1440, 'out': 240, 'se': None, 'stride': 1, 'heads': 2},
+        {'inp': 240, 'exp': 1440, 'out': 240, 'se': None, 'stride': 1, 'heads': 2},
+    ],
+    'fc1': 1920,  # hid_layer
+    'fc2': num_classes  # num_clasess
+    ,
+}
+
+config = {
+    'mf52': config_52,
+    'mf294': config_294,
+    'mf508': config_508
+}
+
+
+import time
+import torch
+import torch.nn as nn
+
+from torch.nn import init
+
+class BaseBlock(nn.Module):
+    def __init__(self, inp, exp, out, se, stride, heads, dim):
+        super(BaseBlock, self).__init__()
+        if stride == 2:
+            self.mobile = MobileDown(3, inp, exp, out, se, stride, dim)
+        else:
+            self.mobile = Mobile(3, inp, exp, out, se, stride, dim)
+        self.mobile2former = Mobile2Former(dim=dim, heads=heads, channel=inp)
+        self.former = Former(dim=dim)
+        self.former2mobile = Former2Mobile(dim=dim, heads=heads, channel=out)
+
+    def forward(self, inputs):
+        x, z = inputs
+        z_hid = self.mobile2former(x, z)
+        z_out = self.former(z_hid)
+        x_hid = self.mobile(x, z_out)
+        x_out = self.former2mobile(x_hid, z_out)
+        return [x_out, z_out]
+
+
+class MobileFormer(nn.Module):
+    def __init__(self, cfg):
+        super(MobileFormer, self).__init__()
+        self.token = nn.Parameter(nn.Parameter(torch.randn(1, cfg['token'], cfg['embed'])))
+        # stem 3 224 224 -> 16 112 112
         self.stem = nn.Sequential(
-            nn.Conv2d(in_chans, stem_chs, 3, stride=2, padding=1, bias=False),
-            nn.BatchNorm2d(stem_chs),
-            nn.ReLU6(inplace=True)
+            nn.Conv2d(3, cfg['stem'], kernel_size=3, stride=2, padding=1, bias=False),
+            nn.BatchNorm2d(cfg['stem']),
+            hswish(),
         )
-        input_channel = stem_chs
-
-        # blocks
-        layer_num = len(block_args)
-        inp_res = img_size * img_size // 4
-        layers = []
-        for idx, val in enumerate(block_args):
-            b, t, c, n, s, t2 = val # t2 for block2 the second expand
-            block = eval(b)
-
-            t = (t, t2)
-            output_channel = _make_divisible(c * width_mult, mdiv) if idx > 0 else _make_divisible(c * width_mult, 4) 
-
-            drop_path_prob = drop_path_rate * (idx+1) / layer_num
-            cnn_drop_path_prob = cnn_drop_path_rate * (idx+1) / layer_num
-
-            layers.append(block(
-                input_channel, 
-                output_channel, 
-                s, 
-                t, 
-                dw_conv=dw_conv,
-                kernel_size=kernel_size,
-                group_num=group_num,
-                se_flag=se_flag,
-                hyper_token_id=hyper_token_id,
-                hyper_reduction_ratio=hyper_reduction_ratio,
-                token_dim=token_dim, 
-                token_num=token_num,
-                inp_res=inp_res,
-                gbr_type=gbr_type,
-                gbr_dynamic=gbr_dynamic,
-                gbr_ffn=gbr_ffn,
-                gbr_before_skip=gbr_before_skip,
-                mlp_token_exp=mlp_token_exp,
-                norm_pos=gbr_norm,
-                drop_path_rate=drop_path_prob,
-                cnn_drop_path_rate=cnn_drop_path_prob,
-                attn_num_heads=attn_num_heads,
-                remove_proj_local=remove_proj_local,        
-            ))
-            input_channel = output_channel
-
-            if s == 2:
-                inp_res = inp_res // 4
-
-            for i in range(1, n):
-                layers.append(block(
-                    input_channel, 
-                    output_channel, 
-                    1, 
-                    t, 
-                    dw_conv=dw_conv,
-                    kernel_size=kernel_size,
-                    group_num=group_num,
-                    se_flag=se_flag,
-                    hyper_token_id=hyper_token_id,
-                    hyper_reduction_ratio=hyper_reduction_ratio,
-                    token_dim=token_dim, 
-                    token_num=token_num,
-                    inp_res=inp_res,
-                    gbr_type=gbr_type,
-                    gbr_dynamic=gbr_dynamic,
-                    gbr_ffn=gbr_ffn,
-                    gbr_before_skip=gbr_before_skip,
-                    mlp_token_exp=mlp_token_exp,
-                    norm_pos=gbr_norm,
-                    drop_path_rate=drop_path_prob,
-                    cnn_drop_path_rate=cnn_drop_path_prob,
-                    attn_num_heads=attn_num_heads,
-                    remove_proj_local=remove_proj_local,
-                ))
-                input_channel = output_channel
-
-        self.features = nn.Sequential(*layers)
-
-        # last layer of local to global
-        self.local_global = Local2Global(
-            input_channel,
-            block_type = gbr_type,
-            token_dim=token_dim,
-            token_num=token_num,
-            inp_res=inp_res,
-            use_dynamic = gbr_dynamic[0],
-            norm_pos=gbr_norm,
-            drop_path_rate=drop_path_rate,
-            attn_num_heads=attn_num_heads
+        # bneck
+        self.bneck = nn.Sequential(
+            nn.Conv2d(cfg['stem'], cfg['bneck']['e'], 3, stride=cfg['bneck']['s'], padding=1, groups=cfg['stem']),
+            hswish(),
+            nn.Conv2d(cfg['bneck']['e'], cfg['bneck']['o'], kernel_size=1, stride=1),
+            nn.BatchNorm2d(cfg['bneck']['o'])
         )
 
-        # classifer
-        self.classifier = MergeClassifier(
-            input_channel, 
-            oup=num_features, 
-            ch_exp=last_exp,
-            num_classes=num_classes,
-            drop_rate=drop_rate,
-            drop_branch=gbr_drop,
-            group_num=group_num,
-            token_dim=token_dim,
-            cls_token_num=cls_token_num,
-            last_act = last_act,
-            hyper_token_id=hyper_token_id,
-            hyper_reduction_ratio=hyper_reduction_ratio
+        # body
+        self.block = nn.ModuleList()
+        for kwargs in cfg['body']:
+            self.block.append(BaseBlock(**kwargs, dim=cfg['embed']))
+        inp = cfg['body'][-1]['out']
+        exp = cfg['body'][-1]['exp']
+        self.conv = nn.Conv2d(inp, exp, kernel_size=1, stride=1, padding=0, bias=False)
+        self.bn = nn.BatchNorm2d(exp)
+        self.avg = nn.AvgPool2d((7, 7))
+        self.head = nn.Sequential(
+            nn.Linear(exp + cfg['embed'], cfg['fc1']),
+            hswish(),
+            nn.Linear(cfg['fc1'], cfg['fc2'])
         )
+        self.init_params()
 
-        #initialize
-        self._initialize_weights()
-
-    def _initialize_weights(self):
+    def init_params(self):
         for m in self.modules():
             if isinstance(m, nn.Conv2d):
-                n = m.kernel_size[0] * m.kernel_size[1] * m.out_channels
-                m.weight.data.normal_(0, math.sqrt(2. / n))
+                init.kaiming_normal_(m.weight, mode='fan_out')
                 if m.bias is not None:
-                    m.bias.data.zero_()
+                    init.constant_(m.bias, 0)
             elif isinstance(m, nn.BatchNorm2d):
-                m.weight.data.fill_(1)
-                m.bias.data.zero_()
+                init.constant_(m.weight, 1)
+                init.constant_(m.bias, 0)
             elif isinstance(m, nn.Linear):
-                n = m.weight.size(1)
-                if m.bias is not None: 
-                    m.bias.data.zero_()
-
+                init.normal_(m.weight, std=0.001)
+                if m.bias is not None:
+                    init.constant_(m.bias, 0)
 
     def forward(self, x):
-        # setup tokens
-        bs, _, _, _ = x.shape
-        z = self.tokens.weight
-        tokens = z[None].repeat(bs, 1, 1).clone()
-        tokens = tokens.permute(1, 0, 2)
- 
-        # stem -> features -> classifier
-        x = self.stem(x)
-        x, tokens = self.features((x, tokens))
-        tokens, attn = self.local_global((x, tokens))
-        y = self.classifier((x, tokens))
-
-        return y
-
-def _create_modification(variant, pretrained=False, **kwargs):
-    model = build_model_with_cfg(
-        Modification, 
-        variant, 
-        pretrained,
-        default_cfg=default_cfgs['default'],
-        **kwargs)
-    print(model)
-
-    return model
-
-common_model_kwargs = dict(
-    cnn_drop_path_rate = 0.1,
-    dw_conv = 'dw',
-    kernel_size=(3, 3),
-    cnn_exp = (6, 4),
-    cls_token_num = 1,
-    hyper_token_id = 0,
-    hyper_reduction_ratio = 4,
-    attn_num_heads = 2,
-    gbr_norm = 'post',
-    mlp_token_exp = 4,
-    gbr_before_skip = False,
-    gbr_drop = [0., 0.],
-    last_act = 'relu',
-    remove_proj_local = True,
-)
-
-
-def modification_508m(pretrained=False, **kwargs):
-
-    #stem = 24
-    dna_blocks = [ 
-        #b, e1,  c, n, s, e2
-        ['DnaBlock3', 2,  24, 1, 1, 0], #1 112x112 (1)
-        ['DnaBlock3', 6,  40, 1, 2, 4], #2 56x56 (2)
-        ['DnaBlock',  3,  40, 1, 1, 3], #3
-        ['DnaBlock3', 6,  72, 1, 2, 4], #4 28x28 (2)
-        ['DnaBlock',  3,  72, 1, 1, 3], #5
-        ['DnaBlock3', 6, 128, 1, 2, 4], #6 14x14 (4)
-        ['DnaBlock',  4, 128, 1, 1, 4], #7
-        ['DnaBlock',  6, 176, 1, 1, 4], #8
-        ['DnaBlock',  6, 176, 1, 1, 4], #9
-        ['DnaBlock3', 6, 240, 1, 2, 4], #10 7x7 (3)
-        ['DnaBlock',  6, 240, 1, 1, 4], #11
-        ['DnaBlock',  6, 240, 1, 1, 4], #12
-    ]
-   
-    model_kwargs = dict(
-        block_args = dna_blocks,
-        width_mult = 1.0,
-        se_flag = [2,0,2,0],
-        group_num = 1,
-        gbr_type = 'attn',
-        gbr_dynamic = [True, False, False],
-        gbr_ffn = True,
-        num_features = 1920,
-        stem_chs = 24,
-        token_num = 6,
-        token_dim = 192,
-        **common_model_kwargs,
-        **kwargs,   
-    )
-    model = _create_modification("modification_508m", pretrained, **model_kwargs)
-    return model
-
-
-def modification_294m(pretrained=False, **kwargs):
-
-    #stem = 16
-    dna_blocks = [ 
-        #b, e1,  c, n, s, e2
-        ['DnaBlock3', 2,  16, 1, 1, 0], #1 112x112 (1)
-        ['DnaBlock3', 6,  24, 1, 2, 4], #2 56x56 (2)
-        ['DnaBlock',  4,  24, 1, 1, 4], #3
-        ['DnaBlock3', 6,  48, 1, 2, 4], #4 28x28 (2)
-        ['DnaBlock',  4,  48, 1, 1, 4], #5
-        ['DnaBlock3', 6,  96, 1, 2, 4], #6 14x14 (4)
-        ['DnaBlock',  4,  96, 1, 1, 4], #7
-        ['DnaBlock',  6, 128, 1, 1, 4], #8
-        ['DnaBlock',  6, 128, 1, 1, 4], #9
-        ['DnaBlock3', 6, 192, 1, 2, 4], #10 7x7 (3)
-        ['DnaBlock',  6, 192, 1, 1, 4], #11
-        ['DnaBlock',  6, 192, 1, 1, 4], #12
-    ]
-  
-    model_kwargs = dict(
-        block_args = dna_blocks,
-        width_mult = 1.0,
-        se_flag = [2,0,2,0],
-        group_num = 1,
-        gbr_type = 'attn',
-        gbr_dynamic = [True, False, False],
-        gbr_ffn = True,
-        num_features = 1920,
-        stem_chs = 16,
-        token_num = 6,
-        token_dim = 192,
-        **common_model_kwargs,
-        **kwargs,   
-    )
-    model = _create_modification("modification_294m", pretrained, **model_kwargs)
-    return model
-
-
-def modification_214m(pretrained=False, **kwargs):
-
-    #stem = 12
-    dna_blocks = [ 
-        #b, e1,  c, n, s, e2
-        ['DnaBlock3', 2,  12, 1, 1, 0], #1 112x112 (1)
-        ['DnaBlock3', 6,  20, 1, 2, 4], #2 56x56 (2)
-        ['DnaBlock',  3,  20, 1, 1, 4], #3
-        ['DnaBlock3', 6,  40, 1, 2, 4], #4 28x28 (2)
-        ['DnaBlock',  4,  40, 1, 1, 4], #5
-        ['DnaBlock3', 6,  80, 1, 2, 4], #6 14x14 (4)
-        ['DnaBlock',  4,  80, 1, 1, 4], #7
-        ['DnaBlock',  6, 112, 1, 1, 4], #8
-        ['DnaBlock',  6, 112, 1, 1, 4], #9
-        ['DnaBlock3', 6, 160, 1, 2, 4], #10 7x7 (3)
-        ['DnaBlock',  6, 160, 1, 1, 4], #11
-        ['DnaBlock',  6, 160, 1, 1, 4], #12
-    ]
-
-
-    model_kwargs = dict(
-        block_args = dna_blocks,
-        width_mult = 1.0,
-        se_flag = [2,0,2,0],
-        group_num = 1,
-        gbr_type = 'attn',
-        gbr_dynamic = [True, False, False],
-        gbr_ffn = True,
-        num_features = 1600,
-        stem_chs = 12,
-        token_num = 6,
-        token_dim = 192,
-        **common_model_kwargs,
-        **kwargs,   
-    )
-    model = _create_modification("modification_214m", pretrained, **model_kwargs)
-    return model
-
-
-def modification_151m(pretrained=False, **kwargs):
-
-    #stem = 12
-    dna_blocks = [ 
-        #b, e1,  c, n, s, e2
-        ['DnaBlock3', 2,  12, 1, 1, 0], #1 112x112 (1)
-        ['DnaBlock3', 6,  16, 1, 2, 4], #2 56x56 (2)
-        ['DnaBlock',  3,  16, 1, 1, 3], #3
-        ['DnaBlock3', 6,  32, 1, 2, 4], #4 28x28 (2)
-        ['DnaBlock',  3,  32, 1, 1, 3], #5
-        ['DnaBlock3', 6,  64, 1, 2, 4], #6 14x14 (4)
-        ['DnaBlock',  4,  64, 1, 1, 4], #7
-        ['DnaBlock',  6,  88, 1, 1, 4], #8
-        ['DnaBlock',  6,  88, 1, 1, 4], #9
-        ['DnaBlock3', 6, 128, 1, 2, 4], #10 7x7 (3)
-        ['DnaBlock',  6, 128, 1, 1, 4], #11
-        ['DnaBlock',  6, 128, 1, 1, 4], #12
-    ]
-
-    model_kwargs = dict(
-        block_args = dna_blocks,
-        width_mult = 1.0,
-        se_flag = [2,0,2,0],
-        group_num = 1,
-        gbr_type = 'attn',
-        gbr_dynamic = [True, False, False],
-        gbr_ffn = True,
-        num_features = 1280,
-        stem_chs = 12,
-        token_num = 6,
-        token_dim = 192,
-        **common_model_kwargs,
-        **kwargs,   
-    )
-    model = _create_modification("modification_151m", pretrained, **model_kwargs)
-    return model
-
-
-def modification_96m(pretrained=False, **kwargs):
-
-    #stem = 12
-    dna_blocks = [ 
-        #b, e1,  c, n, s, e2
-        ['DnaBlock3', 2,  12, 1, 1, 0], #1 112x112 (1)
-        ['DnaBlock3', 6,  16, 1, 2, 4], #2 56x56 (1)
-        ['DnaBlock3', 6,  32, 1, 2, 4], #3 28x28 (2)
-        ['DnaBlock',  3,  32, 1, 1, 3], #4
-        ['DnaBlock3', 6,  64, 1, 2, 4], #5 14x14 (3)
-        ['DnaBlock',  4,  64, 1, 1, 4], #6
-        ['DnaBlock',  6,  88, 1, 1, 4], #7
-        ['DnaBlock3', 6, 128, 1, 2, 4], #8 7x7 (2)
-        ['DnaBlock',  6, 128, 1, 1, 4], #9
-    ]
-
-
-    model_kwargs = dict(
-        block_args = dna_blocks,
-        width_mult = 1.0,
-        se_flag = [2,0,2,0],
-        group_num = 1,
-        gbr_type = 'attn',
-        gbr_dynamic = [True, False, False],
-        gbr_ffn = True,
-        num_features = 1280,
-        stem_chs = 12,
-        token_num = 4,
-        token_dim = 128,
-        **common_model_kwargs,
-        **kwargs,   
-    )
-    model = _create_modification("modification_96m", pretrained, **model_kwargs)
-    return model
-
-
-def modification_52m(pretrained=False, **kwargs):
-
-    #stem = 8
-    dna_blocks = [ 
-        #b, e1,  c, n, s, e2
-        ['DnaBlock3', 3,  12, 1, 2, 0], #1 56x56 (2)
-        ['DnaBlock',  3,  12, 1, 1, 3], #2
-        ['DnaBlock3', 6,  24, 1, 2, 4], #3 28x28 (2)
-        ['DnaBlock',  3,  24, 1, 1, 3], #4
-        ['DnaBlock3', 6,  48, 1, 2, 4], #5 14x14 (3)
-        ['DnaBlock',  4,  48, 1, 1, 4], #6
-        ['DnaBlock',  6,  64, 1, 1, 4], #7
-        ['DnaBlock3', 6,  96, 1, 2, 4], #8 7x7 (2)
-        ['DnaBlock',  6,  96, 1, 1, 4], #9
-    ]
-
-    model_kwargs = dict(
-        block_args = dna_blocks,
-        width_mult = 1.0,
-        se_flag = [2,0,2,0],
-        group_num = 1,
-        gbr_type = 'attn',
-        gbr_dynamic = [True, False, False],
-        gbr_ffn = True,
-        num_features = 1024,
-        stem_chs = 8,
-        token_num = 3,
-        token_dim = 128,
-        **common_model_kwargs,
-        **kwargs,   
-    )
-    model = _create_modification("modification_52m", pretrained, **model_kwargs)
-    return model
-
-
-def modification_26m(pretrained=False, **kwargs):
-
-    #stem = 8
-    dna_blocks = [ 
-        #b, e1,  c, n, s, e2
-        ['DnaBlock3', 3,  12, 1, 2, 0], #1 56x56 (2)
-        ['DnaBlock',  3,  12, 1, 1, 3], #2
-        ['DnaBlock3', 6,  24, 1, 2, 4], #3 28x28 (2)
-        ['DnaBlock',  3,  24, 1, 1, 3], #4
-        ['DnaBlock3', 6,  48, 1, 2, 4], #5 14x14 (3)
-        ['DnaBlock',  4,  48, 1, 1, 4], #6
-        ['DnaBlock',  6,  64, 1, 1, 4], #7
-        ['DnaBlock3', 6,  96, 1, 2, 4], #8 7x7 (2)
-        ['DnaBlock',  6,  96, 1, 1, 4], #9
-    ]
-
-    model_kwargs = dict(
-        block_args = dna_blocks,
-        width_mult = 1.0,
-        se_flag = [2,0,2,0],
-        group_num = 4,
-        gbr_type = 'attn',
-        gbr_dynamic = [True, False, False],
-        gbr_ffn = True,
-        num_features = 1024,
-        stem_chs = 8,
-        token_num = 3,
-        token_dim = 128,
-        **common_model_kwargs,
-        **kwargs,   
-    )
-    model = _create_modification("modification_26m", pretrained, **model_kwargs)
-    return model
-
+        b, _, _, _ = x.shape
+        z = self.token.repeat(b, 1, 1)
+        x = self.bneck(self.stem(x))
+        for m in self.block:
+            x, z = m([x, z])
+        # x, z = self.block([x, z])
+        x = self.avg(self.bn(self.conv(x))).view(b, -1)
+        z = z[:, 0, :].view(b, -1)
+        out = torch.cat((x, z), -1)
+        return self.head(out)
+        # return x, z
 
 #endregion
 
+#@title Train Baru
+#region Train Baru
 
-
-#region 9. FUNGSI TRAINING
-#@title 9. FUNGSI TRAINING
-
+#!/usr/bin/env python3
 """ ImageNet Training Script
 
 This is intended to be a lean and easily modifiable ImageNet training script that reproduces ImageNet
@@ -2288,8 +716,6 @@ NVIDIA CUDA specific speedups adopted from NVIDIA Apex examples
 
 Hacked together by / Copyright 2020 Ross Wightman (https://github.com/rwightman)
 """
-
-#region Import
 import argparse
 import copy
 import importlib
@@ -2310,12 +736,68 @@ from torch.nn.parallel import DistributedDataParallel as NativeDDP
 
 from timm import utils
 from timm.data import create_dataset, create_loader, resolve_data_config, Mixup, FastCollateMixup, AugMixDataset
-from timm.models.layers import convert_splitbn_model, convert_sync_batchnorm, set_fast_norm
+from timm.layers import convert_splitbn_model, convert_sync_batchnorm, set_fast_norm
 from timm.loss import JsdCrossEntropy, SoftTargetCrossEntropy, BinaryCrossEntropy, LabelSmoothingCrossEntropy
 from timm.models import create_model, safe_model_name, resume_checkpoint, load_checkpoint, model_parameters
 from timm.optim import create_optimizer_v2, optimizer_kwargs
 from timm.scheduler import create_scheduler_v2, scheduler_kwargs
 from timm.utils import ApexScaler, NativeScaler
+
+
+def _assign_hyperparameter(args):
+    ### CUSTOM ###
+    # Load this checkpoint as if they were the pretrained weights (with adaptation) (default: None).
+    args.pretrained_path = None
+    # Resume full model and optimizer state from checkpoint (default: '')
+    args.resume = ''
+    # path to dataset (root dir)
+    args.data_dir = '/home/tasi2425111/restructured_resized_imagenet'  #Disesuaikan dengan kebutuhan
+    # number of label classes (Model default if None)
+    args.num_classes = num_classes  #Disesuaikan dengan kebutuhan
+    # Name of model to train (default: "resnet50")
+    args.model = 'mobile_former_294m' #mobile_former_294m  #Disesuaikan dengan kebutuhan
+    # Device (accelerator) to use.
+    args.device = 'cuda:0'
+    args.patience_epochs = 10
+
+    # Input image center crop percent (for validation only)
+    args.crop_pct = False ## Tidak diikutkan karena sudah diresize
+    # Use AutoAugment policy. "v0" or "original". (default: None)
+    args.aa = 'rand-m20-n2-mmax20' ## Operation = 2 , Magnitude = 20
+    # mixup alpha, mixup enabled if > 0. (default: 0.)
+    args.mixup = 0.8
+    # args.loss_type = Softmax # di dalam SoftTargetCrossEntropy() terdapat softmax
+    # Label smoothing (default: 0.1)
+    args.smoothing = 0.1
+    # number of epochs to train (default: 300)
+    args.epochs = 300
+    # Input batch size for training (default: 128)
+    args.batch_size = 32
+    # Optimizer (default: "sgd")
+    args.opt = 'adamw'
+    # learning rate, overrides lr-base if set (default: None)
+    args.lr = 0.00005
+    # lower lr bound for cyclic schedulers that hit 0 (default: 0)
+    # args.min_lr = 0.00005
+    # epochs to warmup LR, if scheduler supports
+    # args.warmup_epochs = 10000 #diambil dari jumlah data pada train_dataset
+
+    # Learning rate scheduler (default: "cosine")
+    # args.sched = 'cosine'
+    # weight decay (default: 2e-5)
+    args.weight_decay = 0.00000001
+    # Clip gradient norm (default: None, no clipping)
+    args.clip_grad = 1.0
+    # Decay factor for model weights moving average (default: 0.9998)
+    args.model_ema_decay = 0.9999
+    # Input all image dimensions (d h w, e.g. --input-size 3 224 224), uses model default if empty
+
+    args.input_size = (3, 224, 224)
+    # Override mean pixel value of dataset
+    args.mean = (0.485, 0.456, 0.406)
+    # Override std deviation of dataset
+    args.std = (0.229, 0.224, 0.225)
+
 
 try:
     from apex import amp
@@ -2342,316 +824,359 @@ has_compile = hasattr(torch, 'compile')
 
 
 _logger = logging.getLogger('train')
-#endregion
 
-#region Hyperparameter
-
-class Args:
-    ### CUSTOM ###
-    # Load this checkpoint as if they were the pretrained weights (with adaptation) (default: None).
-    pretrained_path = '/home/tasi2425111/for_hpc/baru/i_mod/3_new_train/output/train/20250404-095658-modification_294m-224/checkpoint-6.pth.tar'
-    # Resume full model and optimizer state from checkpoint (default: '')
-    resume = '/home/tasi2425111/for_hpc/baru/i_mod/3_new_train/output/train/20250404-095658-modification_294m-224/checkpoint-6.pth.tar'
-    # path to dataset (root dir)
-    data_dir = '/home/tasi2425111/restructured_resized_imagenet'  #Disesuaikan dengan kebutuhan
-    # number of label classes (Model default if None)
-    num_classes = 1000  #Disesuaikan dengan kebutuhan
-    # Name of model to train (default: "resnet50")
-    model = 'modification_294m'  #Disesuaikan dengan kebutuhan
-    # Device (accelerator) to use.
-    device = 'cuda:0'
-    # Input image center crop percent (for validation only)
-    crop_pct = None ## Tidak diikutkan karena sudah diresize
-    # Use AutoAugment policy. "v0" or "original". (default: None)
-    aa = 'rand-m15-n2' ## Operation = 2 , Magnitude = 15
-    # mixup alpha, mixup enabled if > 0. (default: 0.)
-    mixup = 0.8
-    #loss_type = Softmax #Sudah default di code training
-    # Label smoothing (default: 0.1)
-    smoothing = 0.1
-    # number of epochs to train (default: 300)
-    epochs = 300
-    # Input batch size for training (default: 128)
-    batch_size = 20
-    # Validation batch size override (default: None)
-    validation_batch_size = 20
-    # Optimizer (default: "sgd")
-    opt = 'AdamW'
-    # learning rate, overrides lr-base if set (default: None)
-    lr = 1e-3
-    # lower lr bound for cyclic schedulers that hit 0 (default: 0)
-    min_lr = 1e-5
-    # Learning rate scheduler (default: "cosine")
-    sched = 'cosine'
-    # epochs to warmup LR, if scheduler supports
-    warmup_epochs = 10000
-    # weight decay (default: 2e-5)
-    weight_decay = 0.05
-    # Clip gradient norm (default: None, no clipping)
-    clip_grad = 1.0
-    # Decay factor for model weights moving average (default: 0.9998)
-    model_ema_decay = None
-    # Input all image dimensions (d h w, e.g. --input-size 3 224 224), uses model default if empty
-    input_size = (3, 224, 224)
-    # Override mean pixel value of dataset
-    mean = (0.485, 0.456, 0.406)
-    # Override std deviation of dataset
-    std = (0.229, 0.224, 0.225)
+# The first arg parser parses out only the --config argument, this argument is used to
+# load a yaml file containing key-values that override the defaults for the main parser below
+config_parser = parser = argparse.ArgumentParser(description='Training Config', add_help=False)
+parser.add_argument('-c', '--config', default='', type=str, metavar='FILE',
+                    help='YAML config file specifying default arguments')
 
 
-    ### DEFAULT ###
-    # path to dataset (positional is *deprecated*, use --data-dir)
-    data = None
-    # dataset type + name ("<type>/<name>") (default: ImageFolder or ImageTar if empty)
-    dataset = ''
-    # dataset train split (default: train)
-    train_split = 'train'
-    # dataset validation split (default: validation)
-    val_split = 'validation'
-    # Manually specify num samples in train split, for IterableDatasets.
-    train_num_samples = None
-    # Manually specify num samples in validation split, for IterableDatasets.
-    val_num_samples = None
-    # Allow download of dataset for torch/ and tfds/ datasets that support it.
-    dataset_download = False
-    # path to class to idx mapping file (default: "")
-    class_map = ''
-    # Dataset image conversion mode for input images.
-    input_img_mode = None
-    # Dataset key for input images.
-    input_key = None
-    # Dataset key for target labels.
-    target_key = None
-    # Allow huggingface dataset import to execute code downloaded from the dataset's repo.
-    dataset_trust_remote_code = False
-    # Start with pretrained version of specified network (if avail)
-    pretrained = False
-    # Load this checkpoint into model after initialization (default: none)
-    initial_checkpoint = ''
-    # prevent resume of optimizer state when resuming model
-    no_resume_opt = False
-    # Global pool type, one of (fast, avg, max, avgmax, avgmaxc). Model default if None.
-    gp = None
-    # Image size (default: None => model default)
-    img_size = None
-    # Image input channels (default: None => 3)
-    in_chans = None
-    # Image resize interpolation type (overrides model)
-    interpolation = ''
-    # Use channels_last memory layout
-    channels_last = False
-    # Select jit fuser. One of ('', 'te', 'old', 'nvfuser')
-    fuser = ''
-    # The number of steps to accumulate gradients (default: 1)
-    grad_accum_steps = 1
-    # Enable gradient checkpointing through model blocks/stages
-    grad_checkpointing = False
-    # enable experimental fast-norm
-    fast_norm = False
-    # Model kwargs
-    model_kwargs = {}
-    # Head initialization scale
-    head_init_scale = None
-    # Head initialization bias value
-    head_init_bias = None
-    # torch.compile mode (default: None).
-    torchcompile_mode = None
-    # torch.jit.script the full model , action='store_true'
-    torchscript = False
-    # Enable compilation w/ specified backend (default: inductor). const='inductor'
-    torchcompile = None
-    # use NVIDIA Apex AMP or Native AMP for mixed precision training
-    amp = False
-    # lower precision AMP dtype (default: float16)
-    amp_dtype = 'float16'
-    # AMP impl to use, "native" or "apex" (default: native)
-    amp_impl = 'native'
-    # Model dtype override (non-AMP) (default: float32)
-    model_dtype = None
-    # Force broadcast buffers for native DDP to off.
-    no_ddp_bb = False
-    # torch.cuda.synchronize() end of each step
-    synchronize_step = False
-    # Local rank for distributed training
-    local_rank = 0
-    # Python imports for device backend modules.
-    device_modules = None
-    # Optimizer Epsilon (default: None, use opt default)
-    opt_eps = None
-    # Optimizer Betas (default: None, use opt default)
-    opt_betas = None
-    # Optimizer momentum (default: 0.9)
-    momentum = 0.9
-    # Gradient clipping mode. One of ("norm", "value", "agc")
-    clip_mode = 'norm'
-    # layer-wise learning rate decay (default: None)
-    layer_decay = None
-    # action=utils.ParseKwargs
-    opt_kwargs = {}
-    # Apply LR scheduler step on update instead of epoch end.
-    sched_on_updates = False
-    # base learning rate: lr = lr_base * global_batch_size / base_size
-    lr_base = 0.1
-    # base learning rate batch size (divisor, default: 256).
-    lr_base_size = 256
-    # base learning rate vs batch_size scaling ("linear", "sqrt", based on opt if empty)
-    lr_base_scale = ''
-    # learning rate noise on/off epoch percentages
-    lr_noise = None
-    # learning rate noise limit percent (default: 0.67)
-    lr_noise_pct = 0.67
-    # learning rate noise std-dev (default: 1.0)
-    lr_noise_std = 1.0
-    # learning rate cycle len multiplier (default: 1.0)
-    lr_cycle_mul = 1.0
-    # amount to decay each learning rate cycle (default: 0.5)
-    lr_cycle_decay = 0.5
-    # learning rate cycle limit, cycles enabled if > 1
-    lr_cycle_limit = 1
-    # learning rate k-decay for cosine/poly (default: 1.0)
-    lr_k_decay = 1.0
-    # warmup learning rate (default: 1e-5)
-    warmup_lr = 1e-5
-    # epoch repeat multiplier (number of times to repeat dataset epoch per train epoch).
-    epoch_repeats = 0.
-    # manual epoch number (useful on restarts)
-    start_epoch = None
-    # list of decay epoch indices for multistep lr. must be increasing
-    decay_milestones = [90, 180, 270]
-    # epoch interval to decay LR
-    decay_epochs = 90
-    # Exclude warmup period from decay schedule.
-    warmup_prefix = False
-    # epochs to cooldown LR at min_lr, after cyclic schedule ends
-    cooldown_epochs = 0
-    # patience epochs for Plateau LR scheduler (default: 10)
-    patience_epochs = 10
-    # LR decay rate (default: 0.1)
-    decay_rate = 0.1
-    # Disable all training augmentation, override other train aug args
-    no_aug = False
-    # Crop-mode in train
-    train_crop_mode = None
-    # Random resize scale (default: 0.08 1.0)
-    scale = [0.08, 1.0]
-    # Random resize aspect ratio (default: 0.75 1.33)
-    ratio = [3. / 4., 4. / 3.]
-    # Horizontal flip training aug probability
-    hflip = 0.5
-    # Vertical flip training aug probability
-    vflip = 0.
-    # Color jitter factor (default: 0.4)
-    color_jitter = 0.4
-    # Probability of applying any color jitter.
-    color_jitter_prob = None
-    # Probability of applying random grayscale conversion.
-    grayscale_prob = None
-    # Probability of applying gaussian blur.
-    gaussian_blur_prob = None
-    # Number of augmentation repetitions (distributed training only) (default: 0)
-    aug_repeats = 0
-    # Number of augmentation splits (default: 0, valid: 0 or >=2)
-    aug_splits = 0
-    # Enable Jensen-Shannon Divergence + CE loss. Use with `--aug-splits`.
-    jsd_loss = False
-    # Enable BCE loss w/ Mixup/CutMix use.
-    bce_loss = False
-    # Sum over classes when using BCE loss.
-    bce_sum = False
-    # Threshold for binarizing softened BCE targets (default: None, disabled).
-    bce_target_thresh = None
-    # Positive weighting for BCE loss.
-    bce_pos_weight = None
-    # Random erase prob (default: 0.)
-    reprob = 0.
-    # Random erase mode (default: "pixel")
-    remode = 'pixel'
-    # Random erase count (default: 1)
-    recount = 1
-    # Do not random erase first (clean) augmentation split
-    resplit = False
-    # cutmix alpha, cutmix enabled if > 0. (default: 0.)
-    cutmix = 0.0
-    # cutmix min/max ratio, overrides alpha and enables cutmix if set (default: None)
-    cutmix_minmax = None
-    # Probability of performing mixup or cutmix when either/both is enabled
-    mixup_prob = 1.0
-    # Probability of switching to cutmix when both mixup and cutmix enabled
-    mixup_switch_prob = 0.5
-    # How to apply mixup/cutmix params. Per "batch", "pair", or "elem"
-    mixup_mode = 'batch'
-    # Turn off mixup after this epoch, disabled if 0 (default: 0)
-    mixup_off_epoch = 0
-    # Training interpolation (random, bilinear, bicubic default: "random")
-    train_interpolation = 'random'
-    # Dropout rate (default: 0.)
-    drop = 0.0
-    # Drop connect rate, DEPRECATED, use drop-path (default: None)
-    drop_connect = None
-    # Drop path rate (default: None)
-    drop_path = None
-    # Drop block rate (default: None)
-    drop_block = None
-    # BatchNorm momentum override (if not None)
-    bn_momentum = None
-    # BatchNorm epsilon override (if not None)
-    bn_eps = None
-    # Enable NVIDIA Apex or Torch synchronized BatchNorm.
-    sync_bn = False
-    # Distribute BatchNorm stats between nodes after each epoch ("broadcast", "reduce", or "")
-    dist_bn = 'reduce'
-    # Enable separate BN layers per augmentation split.
-    split_bn = False
-    # Enable tracking moving average of model weights.
-    model_ema = False
-    # Force ema to be tracked on CPU, rank=0 node only. Disables EMA validation.
-    model_ema_force_cpu = False
-    # Enable warmup for model EMA decay.
-    model_ema_warmup = False
-    # Random seed (default: 42)
-    seed = 42
-    # worker seed mode (default: all)
-    worker_seeding = 'all'
-    # how many batches to wait before logging training status
-    log_interval = 50
-    # how many batches to wait before writing recovery checkpoint
-    recovery_interval = 0
-    # number of checkpoints to keep (default: 10)
-    checkpoint_hist = 10
-    # how many training processes to use (default: 4)
-    workers = 4
-    # save images of input batches every log interval for debugging
-    save_images = False
-    # Pin CPU memory in DataLoader for more efficient (sometimes) transfer to GPU.
-    pin_mem = False
-    # disable fast prefetcher
-    no_prefetcher = False
-    # path to output folder (default: none, current dir)
-    output = ''
-    # name of train experiment, name of sub-folder for output
-    experiment = ''
-    # Best metric (default: "top1")
-    eval_metric = 'top1'
-    # Test/inference time augmentation (oversampling) factor. 0=None (default: 0)
-    tta = 0
-    # use the multi-epochs-loader to save time at the beginning of every epoch
-    use_multi_epochs_loader = False
-    # log training and validation metrics to wandb
-    log_wandb = False
-    # wandb project name
-    wandb_project = None
-    # wandb tags
-    wandb_tags = []
-    # If resuming a run, the id of the run in wandb
-    wandb_resume_id = ''
+parser = argparse.ArgumentParser(description='PyTorch ImageNet Training')
 
-#endregion
+# Dataset parameters
+group = parser.add_argument_group('Dataset parameters')
+# Keep this argument outside the dataset group because it is positional.
+parser.add_argument('data', nargs='?', metavar='DIR', const=None,
+                    help='path to dataset (positional is *deprecated*, use --data-dir)')
+group.add_argument('--data-dir', metavar='DIR',
+                    help='path to dataset (root dir)')
+group.add_argument('--dataset', metavar='NAME', default='',
+                    help='dataset type + name ("<type>/<name>") (default: ImageFolder or ImageTar if empty)')
+group.add_argument('--train-split', metavar='NAME', default='train',
+                   help='dataset train split (default: train)')
+group.add_argument('--val-split', metavar='NAME', default='validation',
+                   help='dataset validation split (default: validation)')
+group.add_argument('--train-num-samples', default=None, type=int,
+                    metavar='N', help='Manually specify num samples in train split, for IterableDatasets.')
+group.add_argument('--val-num-samples', default=None, type=int,
+                    metavar='N', help='Manually specify num samples in validation split, for IterableDatasets.')
+group.add_argument('--dataset-download', action='store_true', default=False,
+                   help='Allow download of dataset for torch/ and tfds/ datasets that support it.')
+group.add_argument('--class-map', default='', type=str, metavar='FILENAME',
+                   help='path to class to idx mapping file (default: "")')
+group.add_argument('--input-img-mode', default=None, type=str,
+                   help='Dataset image conversion mode for input images.')
+group.add_argument('--input-key', default=None, type=str,
+                   help='Dataset key for input images.')
+group.add_argument('--target-key', default=None, type=str,
+                   help='Dataset key for target labels.')
+group.add_argument('--dataset-trust-remote-code', action='store_true', default=False,
+                   help='Allow huggingface dataset import to execute code downloaded from the dataset\'s repo.')
+
+# Model parameters
+group = parser.add_argument_group('Model parameters')
+group.add_argument('--model', default='resnet50', type=str, metavar='MODEL',
+                   help='Name of model to train (default: "resnet50")')
+group.add_argument('--pretrained', action='store_true', default=False,
+                   help='Start with pretrained version of specified network (if avail)')
+group.add_argument('--pretrained-path', default=None, type=str,
+                   help='Load this checkpoint as if they were the pretrained weights (with adaptation).')
+group.add_argument('--initial-checkpoint', default='', type=str, metavar='PATH',
+                   help='Load this checkpoint into model after initialization (default: none)')
+group.add_argument('--resume', default='', type=str, metavar='PATH',
+                   help='Resume full model and optimizer state from checkpoint (default: none)')
+group.add_argument('--no-resume-opt', action='store_true', default=False,
+                   help='prevent resume of optimizer state when resuming model')
+group.add_argument('--num-classes', type=int, default=None, metavar='N',
+                   help='number of label classes (Model default if None)')
+group.add_argument('--gp', default=None, type=str, metavar='POOL',
+                   help='Global pool type, one of (fast, avg, max, avgmax, avgmaxc). Model default if None.')
+group.add_argument('--img-size', type=int, default=None, metavar='N',
+                   help='Image size (default: None => model default)')
+group.add_argument('--in-chans', type=int, default=None, metavar='N',
+                   help='Image input channels (default: None => 3)')
+group.add_argument('--input-size', default=None, nargs=3, type=int, metavar='N',
+                   help='Input all image dimensions (d h w, e.g. --input-size 3 224 224), uses model default if empty')
+group.add_argument('--crop-pct', default=None, type=float,
+                   metavar='N', help='Input image center crop percent (for validation only)')
+group.add_argument('--mean', type=float, nargs='+', default=None, metavar='MEAN',
+                   help='Override mean pixel value of dataset')
+group.add_argument('--std', type=float, nargs='+', default=None, metavar='STD',
+                   help='Override std deviation of dataset')
+group.add_argument('--interpolation', default='', type=str, metavar='NAME',
+                   help='Image resize interpolation type (overrides model)')
+group.add_argument('-b', '--batch-size', type=int, default=128, metavar='N',
+                   help='Input batch size for training (default: 128)')
+group.add_argument('-vb', '--validation-batch-size', type=int, default=None, metavar='N',
+                   help='Validation batch size override (default: None)')
+group.add_argument('--channels-last', action='store_true', default=False,
+                   help='Use channels_last memory layout')
+group.add_argument('--fuser', default='', type=str,
+                   help="Select jit fuser. One of ('', 'te', 'old', 'nvfuser')")
+group.add_argument('--grad-accum-steps', type=int, default=1, metavar='N',
+                   help='The number of steps to accumulate gradients (default: 1)')
+group.add_argument('--grad-checkpointing', action='store_true', default=False,
+                   help='Enable gradient checkpointing through model blocks/stages')
+group.add_argument('--fast-norm', default=False, action='store_true',
+                   help='enable experimental fast-norm')
+group.add_argument('--model-kwargs', nargs='*', default={}, action=utils.ParseKwargs)
+group.add_argument('--head-init-scale', default=None, type=float,
+                   help='Head initialization scale')
+group.add_argument('--head-init-bias', default=None, type=float,
+                   help='Head initialization bias value')
+group.add_argument('--torchcompile-mode', type=str, default=None,
+                    help="torch.compile mode (default: None).")
+
+# scripting / codegen
+scripting_group = group.add_mutually_exclusive_group()
+scripting_group.add_argument('--torchscript', dest='torchscript', action='store_true',
+                             help='torch.jit.script the full model')
+scripting_group.add_argument('--torchcompile', nargs='?', type=str, default=None, const='inductor',
+                             help="Enable compilation w/ specified backend (default: inductor).")
+
+# Device & distributed
+group = parser.add_argument_group('Device parameters')
+group.add_argument('--device', default='cuda', type=str,
+                    help="Device (accelerator) to use.")
+group.add_argument('--amp', action='store_true', default=False,
+                   help='use NVIDIA Apex AMP or Native AMP for mixed precision training')
+group.add_argument('--amp-dtype', default='float16', type=str,
+                   help='lower precision AMP dtype (default: float16)')
+group.add_argument('--amp-impl', default='native', type=str,
+                   help='AMP impl to use, "native" or "apex" (default: native)')
+group.add_argument('--model-dtype', default=None, type=str,
+                   help='Model dtype override (non-AMP) (default: float32)')
+group.add_argument('--no-ddp-bb', action='store_true', default=False,
+                   help='Force broadcast buffers for native DDP to off.')
+group.add_argument('--synchronize-step', action='store_true', default=False,
+                   help='torch.cuda.synchronize() end of each step')
+group.add_argument("--local_rank", default=0, type=int)
+group.add_argument('--device-modules', default=None, type=str, nargs='+',
+                    help="Python imports for device backend modules.")
+
+# Optimizer parameters
+group = parser.add_argument_group('Optimizer parameters')
+group.add_argument('--opt', default='sgd', type=str, metavar='OPTIMIZER',
+                   help='Optimizer (default: "sgd")')
+group.add_argument('--opt-eps', default=None, type=float, metavar='EPSILON',
+                   help='Optimizer Epsilon (default: None, use opt default)')
+group.add_argument('--opt-betas', default=None, type=float, nargs='+', metavar='BETA',
+                   help='Optimizer Betas (default: None, use opt default)')
+group.add_argument('--momentum', type=float, default=0.9, metavar='M',
+                   help='Optimizer momentum (default: 0.9)')
+group.add_argument('--weight-decay', type=float, default=2e-5,
+                   help='weight decay (default: 2e-5)')
+group.add_argument('--clip-grad', type=float, default=None, metavar='NORM',
+                   help='Clip gradient norm (default: None, no clipping)')
+group.add_argument('--clip-mode', type=str, default='norm',
+                   help='Gradient clipping mode. One of ("norm", "value", "agc")')
+group.add_argument('--layer-decay', type=float, default=None,
+                   help='layer-wise learning rate decay (default: None)')
+group.add_argument('--opt-kwargs', nargs='*', default={}, action=utils.ParseKwargs)
+
+# Learning rate schedule parameters
+group = parser.add_argument_group('Learning rate schedule parameters')
+group.add_argument('--sched', type=str, default='cosine', metavar='SCHEDULER',
+                   help='LR scheduler (default: "cosine"')
+group.add_argument('--sched-on-updates', action='store_true', default=False,
+                   help='Apply LR scheduler step on update instead of epoch end.')
+group.add_argument('--lr', type=float, default=None, metavar='LR',
+                   help='learning rate, overrides lr-base if set (default: None)')
+group.add_argument('--lr-base', type=float, default=0.1, metavar='LR',
+                   help='base learning rate: lr = lr_base * global_batch_size / base_size')
+group.add_argument('--lr-base-size', type=int, default=256, metavar='DIV',
+                   help='base learning rate batch size (divisor, default: 256).')
+group.add_argument('--lr-base-scale', type=str, default='', metavar='SCALE',
+                   help='base learning rate vs batch_size scaling ("linear", "sqrt", based on opt if empty)')
+group.add_argument('--lr-noise', type=float, nargs='+', default=None, metavar='pct, pct',
+                   help='learning rate noise on/off epoch percentages')
+group.add_argument('--lr-noise-pct', type=float, default=0.67, metavar='PERCENT',
+                   help='learning rate noise limit percent (default: 0.67)')
+group.add_argument('--lr-noise-std', type=float, default=1.0, metavar='STDDEV',
+                   help='learning rate noise std-dev (default: 1.0)')
+group.add_argument('--lr-cycle-mul', type=float, default=1.0, metavar='MULT',
+                   help='learning rate cycle len multiplier (default: 1.0)')
+group.add_argument('--lr-cycle-decay', type=float, default=0.5, metavar='MULT',
+                   help='amount to decay each learning rate cycle (default: 0.5)')
+group.add_argument('--lr-cycle-limit', type=int, default=1, metavar='N',
+                   help='learning rate cycle limit, cycles enabled if > 1')
+group.add_argument('--lr-k-decay', type=float, default=1.0,
+                   help='learning rate k-decay for cosine/poly (default: 1.0)')
+group.add_argument('--warmup-lr', type=float, default=1e-5, metavar='LR',
+                   help='warmup learning rate (default: 1e-5)')
+group.add_argument('--min-lr', type=float, default=0, metavar='LR',
+                   help='lower lr bound for cyclic schedulers that hit 0 (default: 0)')
+group.add_argument('--epochs', type=int, default=300, metavar='N',
+                   help='number of epochs to train (default: 300)')
+group.add_argument('--epoch-repeats', type=float, default=0., metavar='N',
+                   help='epoch repeat multiplier (number of times to repeat dataset epoch per train epoch).')
+group.add_argument('--start-epoch', default=None, type=int, metavar='N',
+                   help='manual epoch number (useful on restarts)')
+group.add_argument('--decay-milestones', default=[90, 180, 270], type=int, nargs='+', metavar="MILESTONES",
+                   help='list of decay epoch indices for multistep lr. must be increasing')
+group.add_argument('--decay-epochs', type=float, default=90, metavar='N',
+                   help='epoch interval to decay LR')
+group.add_argument('--warmup-epochs', type=int, default=5, metavar='N',
+                   help='epochs to warmup LR, if scheduler supports')
+group.add_argument('--warmup-prefix', action='store_true', default=False,
+                   help='Exclude warmup period from decay schedule.'),
+group.add_argument('--cooldown-epochs', type=int, default=0, metavar='N',
+                   help='epochs to cooldown LR at min_lr, after cyclic schedule ends')
+group.add_argument('--patience-epochs', type=int, default=10, metavar='N',
+                   help='patience epochs for Plateau LR scheduler (default: 10)')
+group.add_argument('--decay-rate', '--dr', type=float, default=0.1, metavar='RATE',
+                   help='LR decay rate (default: 0.1)')
+
+# Augmentation & regularization parameters
+group = parser.add_argument_group('Augmentation and regularization parameters')
+group.add_argument('--no-aug', action='store_true', default=False,
+                   help='Disable all training augmentation, override other train aug args')
+group.add_argument('--train-crop-mode', type=str, default=None,
+                   help='Crop-mode in train'),
+group.add_argument('--scale', type=float, nargs='+', default=[0.08, 1.0], metavar='PCT',
+                   help='Random resize scale (default: 0.08 1.0)')
+group.add_argument('--ratio', type=float, nargs='+', default=[3. / 4., 4. / 3.], metavar='RATIO',
+                   help='Random resize aspect ratio (default: 0.75 1.33)')
+group.add_argument('--hflip', type=float, default=0.5,
+                   help='Horizontal flip training aug probability')
+group.add_argument('--vflip', type=float, default=0.,
+                   help='Vertical flip training aug probability')
+group.add_argument('--color-jitter', type=float, default=0.4, metavar='PCT',
+                   help='Color jitter factor (default: 0.4)')
+group.add_argument('--color-jitter-prob', type=float, default=None, metavar='PCT',
+                   help='Probability of applying any color jitter.')
+group.add_argument('--grayscale-prob', type=float, default=None, metavar='PCT',
+                   help='Probability of applying random grayscale conversion.')
+group.add_argument('--gaussian-blur-prob', type=float, default=None, metavar='PCT',
+                   help='Probability of applying gaussian blur.')
+group.add_argument('--aa', type=str, default=None, metavar='NAME',
+                   help='Use AutoAugment policy. "v0" or "original". (default: None)'),
+group.add_argument('--aug-repeats', type=float, default=0,
+                   help='Number of augmentation repetitions (distributed training only) (default: 0)')
+group.add_argument('--aug-splits', type=int, default=0,
+                   help='Number of augmentation splits (default: 0, valid: 0 or >=2)')
+group.add_argument('--jsd-loss', action='store_true', default=False,
+                   help='Enable Jensen-Shannon Divergence + CE loss. Use with `--aug-splits`.')
+group.add_argument('--bce-loss', action='store_true', default=False,
+                   help='Enable BCE loss w/ Mixup/CutMix use.')
+group.add_argument('--bce-sum', action='store_true', default=False,
+                   help='Sum over classes when using BCE loss.')
+group.add_argument('--bce-target-thresh', type=float, default=None,
+                   help='Threshold for binarizing softened BCE targets (default: None, disabled).')
+group.add_argument('--bce-pos-weight', type=float, default=None,
+                   help='Positive weighting for BCE loss.')
+group.add_argument('--reprob', type=float, default=0., metavar='PCT',
+                   help='Random erase prob (default: 0.)')
+group.add_argument('--remode', type=str, default='pixel',
+                   help='Random erase mode (default: "pixel")')
+group.add_argument('--recount', type=int, default=1,
+                   help='Random erase count (default: 1)')
+group.add_argument('--resplit', action='store_true', default=False,
+                   help='Do not random erase first (clean) augmentation split')
+group.add_argument('--mixup', type=float, default=0.0,
+                   help='mixup alpha, mixup enabled if > 0. (default: 0.)')
+group.add_argument('--cutmix', type=float, default=0.0,
+                   help='cutmix alpha, cutmix enabled if > 0. (default: 0.)')
+group.add_argument('--cutmix-minmax', type=float, nargs='+', default=None,
+                   help='cutmix min/max ratio, overrides alpha and enables cutmix if set (default: None)')
+group.add_argument('--mixup-prob', type=float, default=1.0,
+                   help='Probability of performing mixup or cutmix when either/both is enabled')
+group.add_argument('--mixup-switch-prob', type=float, default=0.5,
+                   help='Probability of switching to cutmix when both mixup and cutmix enabled')
+group.add_argument('--mixup-mode', type=str, default='batch',
+                   help='How to apply mixup/cutmix params. Per "batch", "pair", or "elem"')
+group.add_argument('--mixup-off-epoch', default=0, type=int, metavar='N',
+                   help='Turn off mixup after this epoch, disabled if 0 (default: 0)')
+group.add_argument('--smoothing', type=float, default=0.1,
+                   help='Label smoothing (default: 0.1)')
+group.add_argument('--train-interpolation', type=str, default='random',
+                   help='Training interpolation (random, bilinear, bicubic default: "random")')
+group.add_argument('--drop', type=float, default=0.0, metavar='PCT',
+                   help='Dropout rate (default: 0.)')
+group.add_argument('--drop-connect', type=float, default=None, metavar='PCT',
+                   help='Drop connect rate, DEPRECATED, use drop-path (default: None)')
+group.add_argument('--drop-path', type=float, default=None, metavar='PCT',
+                   help='Drop path rate (default: None)')
+group.add_argument('--drop-block', type=float, default=None, metavar='PCT',
+                   help='Drop block rate (default: None)')
+
+# Batch norm parameters (only works with gen_efficientnet based models currently)
+group = parser.add_argument_group('Batch norm parameters', 'Only works with gen_efficientnet based models currently.')
+group.add_argument('--bn-momentum', type=float, default=None,
+                   help='BatchNorm momentum override (if not None)')
+group.add_argument('--bn-eps', type=float, default=None,
+                   help='BatchNorm epsilon override (if not None)')
+group.add_argument('--sync-bn', action='store_true',
+                   help='Enable NVIDIA Apex or Torch synchronized BatchNorm.')
+group.add_argument('--dist-bn', type=str, default='reduce',
+                   help='Distribute BatchNorm stats between nodes after each epoch ("broadcast", "reduce", or "")')
+group.add_argument('--split-bn', action='store_true',
+                   help='Enable separate BN layers per augmentation split.')
+
+# Model Exponential Moving Average
+group = parser.add_argument_group('Model exponential moving average parameters')
+group.add_argument('--model-ema', action='store_true', default=False,
+                   help='Enable tracking moving average of model weights.')
+group.add_argument('--model-ema-force-cpu', action='store_true', default=False,
+                   help='Force ema to be tracked on CPU, rank=0 node only. Disables EMA validation.')
+group.add_argument('--model-ema-decay', type=float, default=0.9998,
+                   help='Decay factor for model weights moving average (default: 0.9998)')
+group.add_argument('--model-ema-warmup', action='store_true',
+                   help='Enable warmup for model EMA decay.')
+
+# Misc
+group = parser.add_argument_group('Miscellaneous parameters')
+group.add_argument('--seed', type=int, default=42, metavar='S',
+                   help='random seed (default: 42)')
+group.add_argument('--worker-seeding', type=str, default='all',
+                   help='worker seed mode (default: all)')
+group.add_argument('--log-interval', type=int, default=50, metavar='N',
+                   help='how many batches to wait before logging training status')
+group.add_argument('--recovery-interval', type=int, default=0, metavar='N',
+                   help='how many batches to wait before writing recovery checkpoint')
+group.add_argument('--checkpoint-hist', type=int, default=10, metavar='N',
+                   help='number of checkpoints to keep (default: 10)')
+group.add_argument('-j', '--workers', type=int, default=4, metavar='N',
+                   help='how many training processes to use (default: 4)')
+group.add_argument('--save-images', action='store_true', default=False,
+                   help='save images of input batches every log interval for debugging')
+group.add_argument('--pin-mem', action='store_true', default=False,
+                   help='Pin CPU memory in DataLoader for more efficient (sometimes) transfer to GPU.')
+group.add_argument('--no-prefetcher', action='store_true', default=False,
+                   help='disable fast prefetcher')
+group.add_argument('--output', default='', type=str, metavar='PATH',
+                   help='path to output folder (default: none, current dir)')
+group.add_argument('--experiment', default='', type=str, metavar='NAME',
+                   help='name of train experiment, name of sub-folder for output')
+group.add_argument('--eval-metric', default='top1', type=str, metavar='EVAL_METRIC',
+                   help='Best metric (default: "top1"')
+group.add_argument('--tta', type=int, default=0, metavar='N',
+                   help='Test/inference time augmentation (oversampling) factor. 0=None (default: 0)')
+group.add_argument('--use-multi-epochs-loader', action='store_true', default=False,
+                   help='use the multi-epochs-loader to save time at the beginning of every epoch')
+group.add_argument('--log-wandb', action='store_true', default=False,
+                   help='log training and validation metrics to wandb')
+group.add_argument('--wandb-project', default=None, type=str,
+                   help='wandb project name')
+group.add_argument('--wandb-tags', default=[], type=str, nargs='+',
+                   help='wandb tags')
+group.add_argument('--wandb-resume-id', default='', type=str, metavar='ID',
+                   help='If resuming a run, the id of the run in wandb')
+
+
+def _parse_args():
+    # Do we have a config file to parse?
+    args_config, remaining = config_parser.parse_known_args()
+    if args_config.config:
+        with open(args_config.config, 'r') as f:
+            cfg = yaml.safe_load(f)
+            parser.set_defaults(**cfg)
+
+    # The main arg parser parses the rest of the args, the usual
+    # defaults will have been overridden if config file specified.
+    remaining = [arg for arg in remaining if arg != '-f']
+    args = parser.parse_args(remaining)
+
+    # Cache the args as a text string to save them in the output dir later
+    args_text = yaml.safe_dump(args.__dict__, default_flow_style=False)
+    return args, args_text
+
 
 def main():
     utils.setup_default_logging()
-    args  = Args()
-
-    model = globals()[args.model]()
+    args, args_text = _parse_args()
+    _assign_hyperparameter(args)
 
     if args.device_modules:
         for module in args.device_modules:
@@ -2714,6 +1239,10 @@ def main():
             file=args.pretrained_path,
             num_classes=-1,  # force head adaptation
         )
+
+    # model = globals()[args.model]()
+
+    model = MobileFormer(config_294)
 
     if args.head_init_scale is not None:
         with torch.no_grad():
@@ -3006,6 +1535,7 @@ def main():
             )
         else:
             train_loss_fn = SoftTargetCrossEntropy()
+            # di dalam SoftTargetCrossEntropy() terdapat softmax
     elif args.smoothing:
         if args.bce_loss:
             train_loss_fn = BinaryCrossEntropy(
@@ -3049,8 +1579,8 @@ def main():
             decreasing=decreasing_metric,
             max_history=args.checkpoint_hist
         )
-        # with open(os.path.join(output_dir, 'args.yaml'), 'w') as f:
-        #     f.write(args_text)
+        with open(os.path.join(output_dir, 'args.yaml'), 'w') as f:
+            f.write(args_text)
 
         if args.log_wandb:
             if has_wandb:
@@ -3222,7 +1752,7 @@ def train_one_epoch(
         model_ema=None,
         mixup_fn=None,
         num_updates_total=None,
-  ):
+):
     if args.mixup_off_epoch and epoch >= args.mixup_off_epoch:
         if args.prefetcher and loader.mixup_enabled:
             loader.mixup_enabled = False
@@ -3242,7 +1772,7 @@ def train_one_epoch(
 
     accum_steps = args.grad_accum_steps
     last_accum_steps = len(loader) % accum_steps
-    updates_per_epoch = (len(loader) + accum_steps - 1) // args.grad_accum_steps
+    updates_per_epoch = (len(loader) + accum_steps - 1) // accum_steps
     num_updates = epoch * updates_per_epoch
     last_batch_idx = len(loader) - 1
     last_batch_idx_to_accum = len(loader) - last_accum_steps
@@ -3250,7 +1780,6 @@ def train_one_epoch(
     data_start_time = update_start_time = time.time()
     optimizer.zero_grad()
     update_sample_count = 0
-
     for batch_idx, (input, target) in enumerate(loader):
         last_batch = batch_idx == last_batch_idx
         need_update = last_batch or (batch_idx + 1) % accum_steps == 0
@@ -3357,14 +1886,14 @@ def train_one_epoch(
                     f'Time: {update_time_m.val:.3f}s, {update_sample_count / update_time_m.val:>7.2f}/s  '
                     f'({update_time_m.avg:.3f}s, {update_sample_count / update_time_m.avg:>7.2f}/s)  '
                     f'LR: {lr:.3e}  '
-                    f'Data: {data_time_m.val:.3f} ({data_time_m.avg:.3f})  '
+                    f'Data: {data_time_m.val:.3f} ({data_time_m.avg:.3f})'
                     f'Elapsed/ETA: {waktu_terpakai:.1f}s / {estimasi_sisa:.1f}s'
                 )
 
                 if args.save_images and output_dir:
                     torchvision.utils.save_image(
                         input,
-                        os.path.join(output_dir, f'train-batch-{batch_idx}.jpg'),
+                        os.path.join(output_dir, 'train-batch-%d.jpg' % batch_idx),
                         padding=0,
                         normalize=True
                     )
@@ -3378,6 +1907,7 @@ def train_one_epoch(
 
         update_sample_count = 0
         data_start_time = time.time()
+        # end for
 
     if hasattr(optimizer, 'sync_lookahead'):
         optimizer.sync_lookahead()
@@ -3387,7 +1917,6 @@ def train_one_epoch(
         # synchronize avg loss, each process keeps its own running avg
         loss_avg = torch.tensor([loss_avg], device=device, dtype=torch.float32)
         loss_avg = utils.reduce_tensor(loss_avg, args.world_size).item()
-
     return OrderedDict([('loss', loss_avg)])
 
 
@@ -3465,7 +1994,5 @@ def validate(
 
     return metrics
 
-
 main()
-
 #endregion
