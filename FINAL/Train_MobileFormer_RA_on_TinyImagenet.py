@@ -351,102 +351,73 @@ class FeedForward(nn.Module):
         return self.net(x)
 
 
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+from einops import rearrange, einsum
+
 class Attention(nn.Module):
-    def __init__(self, dim, heads=8, dim_head=64, dropout=0., max_len=256):
-        """
-        Memodifikasi Attention agar menggunakan posisi relatif satu dimensi,
-        sekaligus memperbaiki pattern einops.
-        """
+    def __init__(self, dim, heads=8, dim_head=64, dropout=0., relative_pos=True, num_tokens=6):
         super(Attention, self).__init__()
-        self.dim_head = dim_head
-        self.heads = heads
         inner_dim = heads * dim_head
         project_out = not (heads == 1 and dim_head == dim)
 
+        self.heads = heads
         self.scale = dim_head ** -0.5
-        self.attend = nn.Softmax(dim=-1)
-        self.to_qkv = nn.Linear(dim, inner_dim * 3, bias=False)
+        self.relative_pos = relative_pos
+        self.num_tokens = num_tokens
 
+        self.to_qkv = nn.Linear(dim, inner_dim * 3, bias=False)
+        self.attend = nn.Softmax(dim=-1)
         self.to_out = nn.Sequential(
             nn.Linear(inner_dim, dim),
             nn.Dropout(dropout)
         ) if project_out else nn.Identity()
 
-        # Bagian Relative Position
-        self.max_len = max_len
-        # [heads, 2*max_len - 1]
-        self.relative_bias = nn.Parameter(
-            torch.randn(heads, (2 * max_len) - 1),
-            requires_grad=True
-        )
-        # Indeks relatif 1D. Berbentuk [max_len, max_len].
-        self.register_buffer('relative_indices',
-                             self._get_relative_indices_1d(max_len))
+        # Tambahkan relative position bias table
+        if self.relative_pos:
+            # Tabel posisi relatif: (2*M-1, heads)
+            self.pos_bias_table = nn.Parameter(torch.randn(2 * num_tokens - 1, heads))
 
-        self.dropout_attn = nn.Dropout(dropout)
+            # Buat koordinat dan indeks relatif
+            coords = torch.arange(num_tokens)
+            relative_indices = coords.unsqueeze(1) - coords.unsqueeze(0)  # M x M
+            relative_indices += num_tokens - 1  # shift to start from 0
+            self.register_buffer("relative_indices", relative_indices)
 
-    def _get_relative_indices_1d(self, length):
-        # Membuat tabel indeks relatif 1D [length, length].
-        out = torch.empty(length, length).fill_(float('nan'))
-        for i in range(length):
-            for j in range(length):
-                out[i, j] = i - j + (length - 1)
-        return out.long()
+    def forward(self, x):  # x: (B, M, D), M = num_tokens
+        B, M, _ = x.shape
+        h = self.heads
 
-    def forward(self, x):
-        """
-        x berukuran [b, n, dim].
-        """
-        b, n, _ = x.shape
-
-        # Bagi qkv
         qkv = self.to_qkv(x).chunk(3, dim=-1)
-        # Perbaikan pattern dengan (h d):
-        q, k, v = map(
-            lambda t: rearrange(
-                t,
-                'b n (h d) -> b h n d',
-                h=self.heads,
-                d=self.dim_head
-            ),
-            qkv
-        )
+        q, k, v = map(lambda t: rearrange(t, 'b n (h d) -> b h n d', h=h), qkv)
 
-        # q@k^T dan penambahan relative bias
-        dots = einsum('b h i d, b h j d -> b h i j', q, k) * self.scale
+        dots = einsum('b h i d, b h j d -> b h i j', q, k) * self.scale  # (B, H, M, M)
 
-        # Potong indeks relatif dan bias sesuai n
-        relative_indices = self.relative_indices[:n, :n]
-        relative_indices = relative_indices.view(1, 1, n, n).expand(b, self.heads, -1, -1).to(x.device)
+        # Tambahkan relative position bias
+        if self.relative_pos:
+            # Ambil bias berdasarkan indeks relatif: shape [M, M] -> [M*M] -> ambil dari tabel
+            pos_bias = self.pos_bias_table[self.relative_indices.view(-1)]  # (M*M, H)
+            pos_bias = pos_bias.view(1, self.heads, M, M).expand(B, -1, -1, -1)  # (B, H, M, M)
+            dots = dots + pos_bias
 
-        rel_bias = self.relative_bias.view(1, self.heads, 1, (2 * self.max_len) - 1).expand(b, -1, n, -1)
-        relative_biases = rel_bias.gather(dim=-1, index=relative_indices)
-
-        # Tambahkan ke dots
-        dots = dots + relative_biases
         attn = self.attend(dots)
-        attn = self.dropout_attn(attn)
-
-        # out
-        out = einsum('b h i j, b h j d -> b h i d', attn, v)
+        out = einsum('b h i j, b h j d -> b h i d', attn, v)  # (B, H, M, D_h)
         out = rearrange(out, 'b h n d -> b n (h d)')
-
         return self.to_out(out)
-
-
 
 
 # inputs: n L C
 # output: n L C
 class Former(nn.Module):
-    def __init__(self, dim, depth=1, heads=2, dim_head=32, dropout=0.3):
+    def __init__(self, dim, depth=1, heads=2, dim_head=32, dropout=0.3, num_tokens=6):
         super(Former, self).__init__()
         mlp_dim = dim * 2
         self.layers = nn.ModuleList([])
-        # dim_head = dim // heads
         for _ in range(depth):
             self.layers.append(nn.ModuleList([
-                PreNorm(dim, Attention(dim, heads=heads, dim_head=dim_head, dropout=dropout)),
+                PreNorm(dim, Attention(dim, heads=heads, dim_head=dim_head, dropout=dropout,
+                                       relative_pos=True, num_tokens=num_tokens)),
                 PreNorm(dim, FeedForward(dim, mlp_dim, dropout=dropout))
             ]))
 
@@ -615,14 +586,14 @@ import torch.nn as nn
 from torch.nn import init
 
 class BaseBlock(nn.Module):
-    def __init__(self, inp, exp, out, se, stride, heads, dim):
+    def __init__(self, inp, exp, out, se, stride, heads, dim, num_tokens=6):
         super(BaseBlock, self).__init__()
         if stride == 2:
             self.mobile = MobileDown(3, inp, exp, out, se, stride, dim)
         else:
             self.mobile = Mobile(3, inp, exp, out, se, stride, dim)
         self.mobile2former = Mobile2Former(dim=dim, heads=heads, channel=inp)
-        self.former = Former(dim=dim)
+        self.former = Former(dim=dim, heads=heads, num_tokens=num_tokens)  # Kirim num_tokens
         self.former2mobile = Former2Mobile(dim=dim, heads=heads, channel=out)
 
     def forward(self, inputs):
@@ -655,7 +626,7 @@ class MobileFormer(nn.Module):
         # body
         self.block = nn.ModuleList()
         for kwargs in cfg['body']:
-            self.block.append(BaseBlock(**kwargs, dim=cfg['embed']))
+            self.block.append(BaseBlock(**kwargs, dim=cfg['embed'], num_tokens=cfg['token']))
         inp = cfg['body'][-1]['out']
         exp = cfg['body'][-1]['exp']
         self.conv = nn.Conv2d(inp, exp, kernel_size=1, stride=1, padding=0, bias=False)
@@ -696,6 +667,7 @@ class MobileFormer(nn.Module):
         # return x, z
 
 #endregion
+
 
 #@title Train Baru
 #region Train Baru
@@ -747,9 +719,9 @@ from timm.utils import ApexScaler, NativeScaler
 def _assign_hyperparameter(args):
     ### CUSTOM ###
     # Load this checkpoint as if they were the pretrained weights (with adaptation) (default: None).
-    args.pretrained_path = None
+    args.pretrained_path = '/home/tasi2425111/for_hpc/baru/ti_mod/8_final_final_mod/output/train/20250516-113600-mobile_former_294m-224/last.pth.tar'
     # Resume full model and optimizer state from checkpoint (default: '')
-    args.resume = ''
+    args.resume = '/home/tasi2425111/for_hpc/baru/ti_mod/8_final_final_mod/output/train/20250516-113600-mobile_former_294m-224/last.pth.tar'
     # path to dataset (root dir)
     args.data_dir = '/home/tasi2425111/restructured-resized-tiny-imagenet-200'  #Disesuaikan dengan kebutuhan
     # number of label classes (Model default if None)
