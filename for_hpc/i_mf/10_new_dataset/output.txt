@@ -1,0 +1,98 @@
+nohup: ignoring input
+Training with a single process on 1 device (cuda:0).
+Model mobile_former_294m created, param count:11824088
+Data processing configuration for current model + dataset:
+	input_size: (3, 224, 224)
+	interpolation: bicubic
+	mean: (0.485, 0.456, 0.406)
+	std: (0.229, 0.224, 0.225)
+	crop_pct: 0.875
+	crop_mode: center
+Created AdamW (adamw) optimizer: lr: 5e-05, betas: (0.9, 0.999), eps: 1e-08, weight_decay: 1e-08, amsgrad: False, foreach: None, maximize: False, capturable: False
+AMP not enabled. Training in torch.float32.
+Restoring model state from checkpoint...
+Restoring optimizer state from checkpoint...
+Loaded checkpoint '/home/tasi2425111/for_hpc/baru/i_mf/10_new_dataset/output/train/20250526-090717-mobile_former_294m-224/checkpoint-56.pth.tar' (epoch 56)
+Scheduled epochs: 100 (epochs + cooldown_epochs). Warmup within epochs when warmup_prefix=False. LR stepped per epoch.
+Train: 57 [   0/8004 (  0%)]  Loss: 5.00 (5.00)  Time: 0.852s,   18.78/s  (0.852s,   18.78/s)  LR: 1.955e-05  Data: 0.238 (0.238)Elapsed/ETA: 0.9s / 6818.8s
+Train: 57 [  50/8004 (  1%)]  Loss: 4.34 (5.29)  Time: 0.132s,  121.06/s  (0.148s,  108.05/s)  LR: 1.955e-05  Data: 0.002 (0.007)Elapsed/ETA: 7.6s / 1177.6s
+Train: 57 [ 100/8004 (  1%)]  Loss: 4.89 (5.29)  Time: 0.132s,  120.96/s  (0.142s,  112.28/s)  LR: 1.955e-05  Data: 0.003 (0.005)Elapsed/ETA: 14.4s / 1126.2s
+Train: 57 [ 150/8004 (  2%)]  Loss: 5.96 (5.29)  Time: 0.113s,  141.92/s  (0.140s,  114.05/s)  LR: 1.955e-05  Data: 0.003 (0.004)Elapsed/ETA: 21.2s / 1101.7s
+Train: 57 [ 200/8004 (  3%)]  Loss: 6.15 (5.31)  Time: 0.154s,  104.01/s  (0.139s,  115.11/s)  LR: 1.955e-05  Data: 0.003 (0.004)Elapsed/ETA: 27.9s / 1084.6s
+Train: 57 [ 250/8004 (  3%)]  Loss: 6.35 (5.31)  Time: 0.132s,  120.87/s  (0.138s,  115.89/s)  LR: 1.955e-05  Data: 0.003 (0.004)Elapsed/ETA: 34.7s / 1070.4s
+Train: 57 [ 300/8004 (  4%)]  Loss: 4.45 (5.28)  Time: 0.130s,  123.54/s  (0.138s,  116.08/s)  LR: 1.955e-05  Data: 0.003 (0.004)Elapsed/ETA: 41.5s / 1061.8s
+Train: 57 [ 350/8004 (  4%)]  Loss: 4.08 (5.28)  Time: 0.113s,  141.33/s  (0.137s,  116.39/s)  LR: 1.955e-05  Data: 0.003 (0.003)Elapsed/ETA: 48.3s / 1052.1s
+Train: 57 [ 400/8004 (  5%)]  Loss: 5.04 (5.29)  Time: 0.129s,  124.07/s  (0.137s,  116.80/s)  LR: 1.955e-05  Data: 0.003 (0.003)Elapsed/ETA: 54.9s / 1041.5s
+Train: 57 [ 450/8004 (  6%)]  Loss: 4.93 (5.30)  Time: 0.208s,   76.85/s  (0.142s,  112.74/s)  LR: 1.955e-05  Data: 0.004 (0.003)Elapsed/ETA: 64.0s / 1071.9s
+Train: 57 [ 500/8004 (  6%)]  Loss: 5.99 (5.32)  Time: 0.215s,   74.47/s  (0.149s,  107.66/s)  LR: 1.955e-05  Data: 0.004 (0.004)Elapsed/ETA: 74.5s / 1115.0s
+Train: 57 [ 550/8004 (  7%)]  Loss: 5.77 (5.32)  Time: 0.210s,   76.37/s  (0.154s,  103.78/s)  LR: 1.955e-05  Data: 0.004 (0.004)Elapsed/ETA: 84.9s / 1149.0s
+Train: 57 [ 600/8004 (  8%)]  Loss: 5.07 (5.31)  Time: 0.212s,   75.37/s  (0.159s,  100.79/s)  LR: 1.955e-05  Data: 0.004 (0.004)Elapsed/ETA: 95.4s / 1175.1s
+Train: 57 [ 650/8004 (  8%)]  Loss: 5.56 (5.32)  Time: 0.173s,   92.23/s  (0.162s,   98.60/s)  LR: 1.955e-05  Data: 0.005 (0.004)Elapsed/ETA: 105.6s / 1193.2s
+Train: 57 [ 700/8004 (  9%)]  Loss: 4.79 (5.32)  Time: 0.213s,   75.08/s  (0.164s,   97.77/s)  LR: 1.955e-05  Data: 0.004 (0.004)Elapsed/ETA: 114.7s / 1195.1s
+Train: 57 [ 750/8004 (  9%)]  Loss: 5.60 (5.31)  Time: 0.206s,   77.59/s  (0.166s,   96.12/s)  LR: 1.955e-05  Data: 0.004 (0.004)Elapsed/ETA: 125.0s / 1207.4s
+Train: 57 [ 800/8004 ( 10%)]  Loss: 5.04 (5.31)  Time: 0.214s,   74.82/s  (0.169s,   94.72/s)  LR: 1.955e-05  Data: 0.004 (0.004)Elapsed/ETA: 135.3s / 1216.7s
+Train: 57 [ 850/8004 ( 11%)]  Loss: 5.10 (5.29)  Time: 0.203s,   78.90/s  (0.172s,   93.24/s)  LR: 1.955e-05  Data: 0.003 (0.004)Elapsed/ETA: 146.0s / 1227.5s
+Train: 57 [ 900/8004 ( 11%)]  Loss: 5.98 (5.30)  Time: 0.222s,   72.00/s  (0.174s,   92.14/s)  LR: 1.955e-05  Data: 0.004 (0.004)Elapsed/ETA: 156.5s / 1233.4s
+Train: 57 [ 950/8004 ( 12%)]  Loss: 5.21 (5.30)  Time: 0.207s,   77.13/s  (0.176s,   91.12/s)  LR: 1.955e-05  Data: 0.004 (0.004)Elapsed/ETA: 167.0s / 1238.5s
+Train: 57 [1000/8004 ( 13%)]  Loss: 5.95 (5.31)  Time: 0.222s,   71.91/s  (0.178s,   90.06/s)  LR: 1.955e-05  Data: 0.004 (0.004)Elapsed/ETA: 177.8s / 1244.1s
+Train: 57 [1050/8004 ( 13%)]  Loss: 5.87 (5.31)  Time: 0.215s,   74.38/s  (0.180s,   89.06/s)  LR: 1.955e-05  Data: 0.004 (0.004)Elapsed/ETA: 188.8s / 1249.1s
+Train: 57 [1100/8004 ( 14%)]  Loss: 6.13 (5.31)  Time: 0.223s,   71.68/s  (0.182s,   88.14/s)  LR: 1.955e-05  Data: 0.004 (0.004)Elapsed/ETA: 199.9s / 1253.1s
+Train: 57 [1150/8004 ( 14%)]  Loss: 5.76 (5.31)  Time: 0.221s,   72.24/s  (0.183s,   87.33/s)  LR: 1.955e-05  Data: 0.004 (0.004)Elapsed/ETA: 210.9s / 1255.5s
+Train: 57 [1200/8004 ( 15%)]  Loss: 6.52 (5.31)  Time: 0.228s,   70.17/s  (0.185s,   86.58/s)  LR: 1.955e-05  Data: 0.004 (0.004)Elapsed/ETA: 221.9s / 1257.2s
+Train: 57 [1250/8004 ( 16%)]  Loss: 6.35 (5.32)  Time: 0.220s,   72.79/s  (0.186s,   85.91/s)  LR: 1.955e-05  Data: 0.004 (0.004)Elapsed/ETA: 233.0s / 1257.7s
+Train: 57 [1300/8004 ( 16%)]  Loss: 6.04 (5.32)  Time: 0.221s,   72.48/s  (0.188s,   85.28/s)  LR: 1.955e-05  Data: 0.004 (0.004)Elapsed/ETA: 244.1s / 1257.6s
+Train: 57 [1350/8004 ( 17%)]  Loss: 6.05 (5.32)  Time: 0.223s,   71.82/s  (0.189s,   84.73/s)  LR: 1.955e-05  Data: 0.004 (0.004)Elapsed/ETA: 255.1s / 1256.3s
+Train: 57 [1400/8004 ( 18%)]  Loss: 5.32 (5.32)  Time: 0.230s,   69.56/s  (0.190s,   84.24/s)  LR: 1.955e-05  Data: 0.004 (0.004)Elapsed/ETA: 266.1s / 1254.1s
+Train: 57 [1450/8004 ( 18%)]  Loss: 5.42 (5.32)  Time: 0.227s,   70.61/s  (0.191s,   83.76/s)  LR: 1.955e-05  Data: 0.004 (0.004)Elapsed/ETA: 277.2s / 1251.7s
+Train: 57 [1500/8004 ( 19%)]  Loss: 3.91 (5.32)  Time: 0.215s,   74.40/s  (0.192s,   83.31/s)  LR: 1.955e-05  Data: 0.004 (0.004)Elapsed/ETA: 288.3s / 1248.9s
+Train: 57 [1550/8004 ( 19%)]  Loss: 5.37 (5.31)  Time: 0.227s,   70.63/s  (0.193s,   82.91/s)  LR: 1.955e-05  Data: 0.004 (0.004)Elapsed/ETA: 299.3s / 1245.4s
+Train: 57 [1600/8004 ( 20%)]  Loss: 4.79 (5.32)  Time: 0.221s,   72.56/s  (0.194s,   82.64/s)  LR: 1.955e-05  Data: 0.004 (0.004)Elapsed/ETA: 310.0s / 1239.8s
+Train: 57 [1650/8004 ( 21%)]  Loss: 4.07 (5.32)  Time: 0.216s,   74.03/s  (0.194s,   82.37/s)  LR: 1.955e-05  Data: 0.004 (0.004)Elapsed/ETA: 320.7s / 1234.0s
+Train: 57 [1700/8004 ( 21%)]  Loss: 4.63 (5.32)  Time: 0.176s,   90.94/s  (0.195s,   82.10/s)  LR: 1.955e-05  Data: 0.004 (0.004)Elapsed/ETA: 331.5s / 1228.3s
+Train: 57 [1750/8004 ( 22%)]  Loss: 5.38 (5.32)  Time: 0.217s,   73.76/s  (0.195s,   81.90/s)  LR: 1.955e-05  Data: 0.004 (0.004)Elapsed/ETA: 342.1s / 1221.6s
+Train: 57 [1800/8004 ( 23%)]  Loss: 6.30 (5.32)  Time: 0.218s,   73.38/s  (0.196s,   81.75/s)  LR: 1.955e-05  Data: 0.004 (0.004)Elapsed/ETA: 352.5s / 1214.0s
+Train: 57 [1850/8004 ( 23%)]  Loss: 4.09 (5.32)  Time: 0.211s,   75.75/s  (0.196s,   81.62/s)  LR: 1.955e-05  Data: 0.004 (0.004)Elapsed/ETA: 362.8s / 1206.1s
+Train: 57 [1900/8004 ( 24%)]  Loss: 5.21 (5.32)  Time: 0.224s,   71.40/s  (0.196s,   81.44/s)  LR: 1.955e-05  Data: 0.004 (0.004)Elapsed/ETA: 373.5s / 1199.0s
+Train: 57 [1950/8004 ( 24%)]  Loss: 3.87 (5.32)  Time: 0.213s,   75.28/s  (0.197s,   81.33/s)  LR: 1.955e-05  Data: 0.004 (0.004)Elapsed/ETA: 383.8s / 1190.8s
+Train: 57 [2000/8004 ( 25%)]  Loss: 6.30 (5.32)  Time: 0.177s,   90.23/s  (0.197s,   81.19/s)  LR: 1.955e-05  Data: 0.004 (0.004)Elapsed/ETA: 394.3s / 1183.0s
+Train: 57 [2050/8004 ( 26%)]  Loss: 5.70 (5.33)  Time: 0.226s,   70.92/s  (0.198s,   81.00/s)  LR: 1.955e-05  Data: 0.004 (0.004)Elapsed/ETA: 405.1s / 1175.9s
+Train: 57 [2100/8004 ( 26%)]  Loss: 4.73 (5.33)  Time: 0.226s,   70.68/s  (0.198s,   80.84/s)  LR: 1.955e-05  Data: 0.004 (0.004)Elapsed/ETA: 415.8s / 1168.4s
+Train: 57 [2150/8004 ( 27%)]  Loss: 6.03 (5.33)  Time: 0.220s,   72.64/s  (0.198s,   80.68/s)  LR: 1.955e-05  Data: 0.004 (0.004)Elapsed/ETA: 426.6s / 1160.8s
+Train: 57 [2200/8004 ( 27%)]  Loss: 5.42 (5.33)  Time: 0.210s,   76.05/s  (0.199s,   80.52/s)  LR: 1.955e-05  Data: 0.004 (0.004)Elapsed/ETA: 437.4s / 1153.1s
+Train: 57 [2250/8004 ( 28%)]  Loss: 3.71 (5.33)  Time: 0.222s,   72.15/s  (0.199s,   80.35/s)  LR: 1.955e-05  Data: 0.004 (0.004)Elapsed/ETA: 448.3s / 1145.7s
+Train: 57 [2300/8004 ( 29%)]  Loss: 6.11 (5.33)  Time: 0.212s,   75.43/s  (0.199s,   80.24/s)  LR: 1.955e-05  Data: 0.003 (0.004)Elapsed/ETA: 458.8s / 1137.2s
+Train: 57 [2350/8004 ( 29%)]  Loss: 5.01 (5.33)  Time: 0.216s,   74.10/s  (0.200s,   80.11/s)  LR: 1.955e-05  Data: 0.004 (0.004)Elapsed/ETA: 469.5s / 1129.0s
+Train: 57 [2400/8004 ( 30%)]  Loss: 4.38 (5.33)  Time: 0.201s,   79.65/s  (0.200s,   79.99/s)  LR: 1.955e-05  Data: 0.004 (0.004)Elapsed/ETA: 480.3s / 1120.7s
+Train: 57 [2450/8004 ( 31%)]  Loss: 5.55 (5.33)  Time: 0.209s,   76.50/s  (0.200s,   79.84/s)  LR: 1.955e-05  Data: 0.004 (0.004)Elapsed/ETA: 491.2s / 1112.9s
+Train: 57 [2500/8004 ( 31%)]  Loss: 4.81 (5.32)  Time: 0.228s,   70.13/s  (0.201s,   79.72/s)  LR: 1.955e-05  Data: 0.004 (0.004)Elapsed/ETA: 501.9s / 1104.4s
+Train: 57 [2550/8004 ( 32%)]  Loss: 5.16 (5.33)  Time: 0.227s,   70.41/s  (0.201s,   79.59/s)  LR: 1.955e-05  Data: 0.004 (0.004)Elapsed/ETA: 512.8s / 1096.3s
+Train: 57 [2600/8004 ( 32%)]  Loss: 5.34 (5.33)  Time: 0.218s,   73.35/s  (0.201s,   79.46/s)  LR: 1.955e-05  Data: 0.004 (0.004)Elapsed/ETA: 523.7s / 1087.9s
+Train: 57 [2650/8004 ( 33%)]  Loss: 5.90 (5.33)  Time: 0.213s,   75.05/s  (0.202s,   79.37/s)  LR: 1.955e-05  Data: 0.004 (0.004)Elapsed/ETA: 534.4s / 1079.0s
+Train: 57 [2700/8004 ( 34%)]  Loss: 4.66 (5.33)  Time: 0.222s,   72.09/s  (0.202s,   79.24/s)  LR: 1.955e-05  Data: 0.004 (0.004)Elapsed/ETA: 545.4s / 1070.8s
+Train: 57 [2750/8004 ( 34%)]  Loss: 5.55 (5.33)  Time: 0.226s,   70.69/s  (0.202s,   79.12/s)  LR: 1.955e-05  Data: 0.004 (0.004)Elapsed/ETA: 556.3s / 1062.3s
+Train: 57 [2800/8004 ( 35%)]  Loss: 4.74 (5.33)  Time: 0.219s,   72.97/s  (0.203s,   79.00/s)  LR: 1.955e-05  Data: 0.004 (0.004)Elapsed/ETA: 567.3s / 1053.7s
+Train: 57 [2850/8004 ( 36%)]  Loss: 4.80 (5.33)  Time: 0.223s,   71.77/s  (0.203s,   78.89/s)  LR: 1.955e-05  Data: 0.004 (0.004)Elapsed/ETA: 578.2s / 1045.1s
+Train: 57 [2900/8004 ( 36%)]  Loss: 5.80 (5.33)  Time: 0.226s,   70.79/s  (0.203s,   78.77/s)  LR: 1.955e-05  Data: 0.004 (0.004)Elapsed/ETA: 589.2s / 1036.5s
+Train: 57 [2950/8004 ( 37%)]  Loss: 5.60 (5.33)  Time: 0.221s,   72.27/s  (0.203s,   78.67/s)  LR: 1.955e-05  Data: 0.004 (0.004)Elapsed/ETA: 600.2s / 1027.7s
+Train: 57 [3000/8004 ( 37%)]  Loss: 3.94 (5.33)  Time: 0.215s,   74.55/s  (0.204s,   78.58/s)  LR: 1.955e-05  Data: 0.005 (0.004)Elapsed/ETA: 611.0s / 1018.7s
+Train: 57 [3050/8004 ( 38%)]  Loss: 6.46 (5.33)  Time: 0.220s,   72.72/s  (0.204s,   78.50/s)  LR: 1.955e-05  Data: 0.004 (0.004)Elapsed/ETA: 621.9s / 1009.6s
+Train: 57 [3100/8004 ( 39%)]  Loss: 5.69 (5.33)  Time: 0.210s,   76.21/s  (0.204s,   78.40/s)  LR: 1.955e-05  Data: 0.004 (0.004)Elapsed/ETA: 632.8s / 1000.6s
+Train: 57 [3150/8004 ( 39%)]  Loss: 6.06 (5.33)  Time: 0.166s,   96.34/s  (0.204s,   78.35/s)  LR: 1.955e-05  Data: 0.003 (0.004)Elapsed/ETA: 643.5s / 991.0s
+Train: 57 [3200/8004 ( 40%)]  Loss: 5.14 (5.33)  Time: 0.229s,   69.73/s  (0.204s,   78.26/s)  LR: 1.955e-05  Data: 0.004 (0.004)Elapsed/ETA: 654.4s / 982.0s
+Train: 57 [3250/8004 ( 41%)]  Loss: 5.77 (5.33)  Time: 0.213s,   74.95/s  (0.205s,   78.17/s)  LR: 1.955e-05  Data: 0.004 (0.004)Elapsed/ETA: 665.4s / 972.8s
+Train: 57 [3300/8004 ( 41%)]  Loss: 4.70 (5.33)  Time: 0.216s,   74.24/s  (0.205s,   78.09/s)  LR: 1.955e-05  Data: 0.005 (0.004)Elapsed/ETA: 676.3s / 963.6s
+Train: 57 [3350/8004 ( 42%)]  Loss: 5.87 (5.33)  Time: 0.228s,   70.26/s  (0.205s,   78.05/s)  LR: 1.955e-05  Data: 0.004 (0.004)Elapsed/ETA: 686.9s / 953.9s
+Train: 57 [3400/8004 ( 42%)]  Loss: 5.60 (5.33)  Time: 0.223s,   71.81/s  (0.205s,   77.98/s)  LR: 1.955e-05  Data: 0.004 (0.004)Elapsed/ETA: 697.8s / 944.5s
+Train: 57 [3450/8004 ( 43%)]  Loss: 5.83 (5.33)  Time: 0.172s,   93.22/s  (0.205s,   77.92/s)  LR: 1.955e-05  Data: 0.003 (0.004)Elapsed/ETA: 708.7s / 935.0s
+Train: 57 [3500/8004 ( 44%)]  Loss: 4.27 (5.33)  Time: 0.222s,   72.18/s  (0.205s,   77.87/s)  LR: 1.955e-05  Data: 0.004 (0.004)Elapsed/ETA: 719.4s / 925.3s
+Train: 57 [3550/8004 ( 44%)]  Loss: 5.60 (5.33)  Time: 0.212s,   75.35/s  (0.206s,   77.80/s)  LR: 1.955e-05  Data: 0.004 (0.004)Elapsed/ETA: 730.2s / 915.7s
+Train: 57 [3600/8004 ( 45%)]  Loss: 5.42 (5.33)  Time: 0.215s,   74.54/s  (0.206s,   77.75/s)  LR: 1.955e-05  Data: 0.004 (0.004)Elapsed/ETA: 741.0s / 906.0s
+Train: 57 [3650/8004 ( 46%)]  Loss: 6.16 (5.33)  Time: 0.214s,   74.78/s  (0.206s,   77.69/s)  LR: 1.955e-05  Data: 0.004 (0.004)Elapsed/ETA: 751.9s / 896.5s
+Train: 57 [3700/8004 ( 46%)]  Loss: 5.87 (5.33)  Time: 0.209s,   76.44/s  (0.206s,   77.63/s)  LR: 1.955e-05  Data: 0.005 (0.004)Elapsed/ETA: 762.8s / 886.9s
+Train: 57 [3750/8004 ( 47%)]  Loss: 4.12 (5.33)  Time: 0.225s,   71.22/s  (0.206s,   77.56/s)  LR: 1.955e-05  Data: 0.004 (0.004)Elapsed/ETA: 773.8s / 877.4s
+Train: 57 [3800/8004 ( 47%)]  Loss: 6.32 (5.33)  Time: 0.223s,   71.78/s  (0.206s,   77.50/s)  LR: 1.955e-05  Data: 0.004 (0.004)Elapsed/ETA: 784.8s / 867.8s
+Train: 57 [3850/8004 ( 48%)]  Loss: 6.23 (5.33)  Time: 0.226s,   70.81/s  (0.207s,   77.44/s)  LR: 1.955e-05  Data: 0.004 (0.004)Elapsed/ETA: 795.6s / 858.0s
+Train: 57 [3900/8004 ( 49%)]  Loss: 5.61 (5.33)  Time: 0.220s,   72.81/s  (0.207s,   77.39/s)  LR: 1.955e-05  Data: 0.004 (0.004)Elapsed/ETA: 806.6s / 848.3s
+Train: 57 [3950/8004 ( 49%)]  Loss: 6.25 (5.33)  Time: 0.227s,   70.39/s  (0.207s,   77.35/s)  LR: 1.955e-05  Data: 0.004 (0.004)Elapsed/ETA: 817.3s / 838.4s
+Train: 57 [4000/8004 ( 50%)]  Loss: 6.05 (5.33)  Time: 0.209s,   76.70/s  (0.207s,   77.30/s)  LR: 1.955e-05  Data: 0.004 (0.004)Elapsed/ETA: 828.2s / 828.6s
+Train: 57 [4050/8004 ( 51%)]  Loss: 4.70 (5.33)  Time: 0.194s,   82.39/s  (0.207s,   77.25/s)  LR: 1.955e-05  Data: 0.004 (0.004)Elapsed/ETA: 839.0s / 818.7s

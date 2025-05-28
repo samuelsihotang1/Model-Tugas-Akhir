@@ -655,7 +655,7 @@ def _assign_hyperparameter(args):
     # Name of model to train (default: "resnet50")
     args.model = 'coatnet_3' #coatnet_3  #Disesuaikan dengan kebutuhan
     # Device (accelerator) to use.
-    args.device = 'cuda:0'
+    args.device = 'cuda:1'
     args.patience_epochs = 10
 
     # Input image center crop percent (for validation only)
