@@ -1,7 +1,7 @@
 num_classes = 1000
 
-#@title 2. DEFINISI ARSITEKTUR MODEL (Mobile-Former)
-#region 2. DEFINISI ARSITEKTUR MODEL (Mobile-Former)
+#@title 2. DEFINISI ARSITEKTUR MODEL (MOD)
+#region 2. DEFINISI ARSITEKTUR MODEL (MOD)
 import math
 import torch
 import random
