@@ -719,9 +719,9 @@ from timm.utils import ApexScaler, NativeScaler
 def _assign_hyperparameter(args):
     ### CUSTOM ###
     # Load this checkpoint as if they were the pretrained weights (with adaptation) (default: None).
-    args.pretrained_path = None
+    args.pretrained_path = '/home/tasi2425111/for_hpc/baru/i_mod/6_new_dataset/output/train/20250526-090752-mobile_former_294m-224/checkpoint-50.pth.tar'
     # Resume full model and optimizer state from checkpoint (default: '')
-    args.resume = ''
+    args.resume = '/home/tasi2425111/for_hpc/baru/i_mod/6_new_dataset/output/train/20250526-090752-mobile_former_294m-224/checkpoint-50.pth.tar'
     # path to dataset (root dir)
     args.data_dir = '/home/tasi2425111/restructured_resized_imagenet'  #Disesuaikan dengan kebutuhan
     # number of label classes (Model default if None)
@@ -729,7 +729,7 @@ def _assign_hyperparameter(args):
     # Name of model to train (default: "resnet50")
     args.model = 'mobile_former_294m' #mobile_former_294m  #Disesuaikan dengan kebutuhan
     # Device (accelerator) to use.
-    args.device = 'cuda:1'
+    args.device = 'cuda:0'
     args.patience_epochs = 10
 
     # Input image center crop percent (for validation only)
@@ -742,9 +742,9 @@ def _assign_hyperparameter(args):
     # Label smoothing (default: 0.1)
     args.smoothing = 0.1
     # number of epochs to train (default: 300)
-    args.epochs = 300
+    args.epochs = 100
     # Input batch size for training (default: 128)
-    args.batch_size = 32
+    args.batch_size = 16
     # Optimizer (default: "sgd")
     args.opt = 'adamw'
     # learning rate, overrides lr-base if set (default: None)

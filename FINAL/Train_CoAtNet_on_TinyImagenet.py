@@ -670,7 +670,7 @@ def _assign_hyperparameter(args):
     # number of epochs to train (default: 300)
     args.epochs = 300
     # Input batch size for training (default: 128)
-    args.batch_size = 32
+    args.batch_size = 16
     # Optimizer (default: "sgd")
     args.opt = 'adamw'
     # learning rate, overrides lr-base if set (default: None)

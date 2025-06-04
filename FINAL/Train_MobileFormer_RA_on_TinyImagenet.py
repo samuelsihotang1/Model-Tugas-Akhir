@@ -719,9 +719,9 @@ from timm.utils import ApexScaler, NativeScaler
 def _assign_hyperparameter(args):
     ### CUSTOM ###
     # Load this checkpoint as if they were the pretrained weights (with adaptation) (default: None).
-    args.pretrained_path = '/home/tasi2425111/for_hpc/baru/ti_mod/8_final_final_mod/output/train/20250516-113600-mobile_former_294m-224/last.pth.tar'
+    args.pretrained_path = None
     # Resume full model and optimizer state from checkpoint (default: '')
-    args.resume = '/home/tasi2425111/for_hpc/baru/ti_mod/8_final_final_mod/output/train/20250516-113600-mobile_former_294m-224/last.pth.tar'
+    args.resume = ''
     # path to dataset (root dir)
     args.data_dir = '/home/tasi2425111/restructured-resized-tiny-imagenet-200'  #Disesuaikan dengan kebutuhan
     # number of label classes (Model default if None)
@@ -744,7 +744,7 @@ def _assign_hyperparameter(args):
     # number of epochs to train (default: 300)
     args.epochs = 300
     # Input batch size for training (default: 128)
-    args.batch_size = 32
+    args.batch_size = 16
     # Optimizer (default: "sgd")
     args.opt = 'adamw'
     # learning rate, overrides lr-base if set (default: None)

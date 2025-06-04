@@ -704,7 +704,7 @@ def _assign_hyperparameter(args):
     # Name of model to train (default: "resnet50")
     args.model = 'mobile_former_294m' #mobile_former_294m  #Disesuaikan dengan kebutuhan
     # Device (accelerator) to use.
-    args.device = 'cuda:1'
+    args.device = 'cuda:0'
     args.patience_epochs = 10
 
     # Input image center crop percent (for validation only)
@@ -719,7 +719,7 @@ def _assign_hyperparameter(args):
     # number of epochs to train (default: 300)
     args.epochs = 300
     # Input batch size for training (default: 128)
-    args.batch_size = 32
+    args.batch_size = 16
     # Optimizer (default: "sgd")
     args.opt = 'adamw'
     # learning rate, overrides lr-base if set (default: None)

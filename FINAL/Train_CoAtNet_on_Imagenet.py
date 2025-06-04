@@ -655,7 +655,7 @@ def _assign_hyperparameter(args):
     # Name of model to train (default: "resnet50")
     args.model = 'coatnet_3' #coatnet_3  #Disesuaikan dengan kebutuhan
     # Device (accelerator) to use.
-    args.device = 'cuda:0'
+    args.device = 'cuda:1'
     args.patience_epochs = 10
 
     # Input image center crop percent (for validation only)
@@ -668,9 +668,9 @@ def _assign_hyperparameter(args):
     # Label smoothing (default: 0.1)
     args.smoothing = 0.1
     # number of epochs to train (default: 300)
-    args.epochs = 300
+    args.epochs = 100
     # Input batch size for training (default: 128)
-    args.batch_size = 32
+    args.batch_size = 16
     # Optimizer (default: "sgd")
     args.opt = 'adamw'
     # learning rate, overrides lr-base if set (default: None)
