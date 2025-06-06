@@ -1,0 +1,23 @@
+--fvcore
+Link : https://colab.research.google.com/drive/14eTOm-CkgDn1u5dQoim58kqTFDDCn6bg?usp=sharing
+Mobile-Former FLOPs : 348596224.0
+CoAtNet FLOPs : 36098720256
+Mobile-Former-RA FLOPs : 348596224.0
+
+--thop
+Link : https://colab.research.google.com/drive/1c-Ftyi5jpf2W91sbeb5fSxSKLtTfQNXH?usp=sharing
+Mobile-Former FLOPs : 326907694.00
+CoAtNet FLOPs : 26539278336.00
+Mobile-Former-RA FLOPs : 326907694.00
+
+--ptflops
+Link : https://colab.research.google.com/drive/1c-Ftyi5jpf2W91sbeb5fSxSKLtTfQNXH?usp=sharing
+Mobile-Former FLOPs : 320673324.00
+CoAtNet FLOPs : 27331429864.00
+Mobile-Former-RA FLOPs : 320673324.00
+
+--calflops
+Link : https://colab.research.google.com/drive/119kY2UGof-hrOFT2xZhKBhvFQUvlRHKY?usp=sharing
+Mobile-Former FLOPs : 310811904.00
+CoAtNet FLOPs : 35874576384.00
+Mobile-Former-RA FLOPs : 310811904.00

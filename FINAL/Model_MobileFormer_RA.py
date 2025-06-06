@@ -1,7 +1,7 @@
 num_classes = 1000
 
-#@title 2. DEFINISI ARSITEKTUR MODEL (MOD)
-#region 2. DEFINISI ARSITEKTUR MODEL (MOD)
+#@title DEFINISI ARSITEKTUR MODEL (Mobile-Fromer-RA)
+#region DEFINISI ARSITEKTUR MODEL (Mobile-Fromer-RA)
 import math
 import torch
 import random
@@ -605,9 +605,9 @@ class BaseBlock(nn.Module):
         return [x_out, z_out]
 
 
-class MobileFormer(nn.Module):
+class MobileFormerRA(nn.Module):
     def __init__(self, cfg):
-        super(MobileFormer, self).__init__()
+        super(MobileFormerRA, self).__init__()
         self.token = nn.Parameter(nn.Parameter(torch.randn(1, cfg['token'], cfg['embed'])))
         # stem 3 224 224 -> 16 112 112
         self.stem = nn.Sequential(

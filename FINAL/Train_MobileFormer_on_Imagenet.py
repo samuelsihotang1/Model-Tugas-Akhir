@@ -1,7 +1,7 @@
 num_classes = 1000
 
-#@title 2. DEFINISI ARSITEKTUR MODEL (Mobile-Former)
-#region 2. DEFINISI ARSITEKTUR MODEL (Mobile-Former)
+#@title DEFINISI ARSITEKTUR MODEL (Mobile-Former)
+#region DEFINISI ARSITEKTUR MODEL (Mobile-Former)
 import math
 import torch
 import random
@@ -694,9 +694,9 @@ from timm.utils import ApexScaler, NativeScaler
 def _assign_hyperparameter(args):
     ### CUSTOM ###
     # Load this checkpoint as if they were the pretrained weights (with adaptation) (default: None).
-    args.pretrained_path = '/home/tasi2425111/for_hpc/baru/i_mf/10_new_dataset/output/train/20250526-090717-mobile_former_294m-224/checkpoint-56.pth.tar'
+    args.pretrained_path = None
     # Resume full model and optimizer state from checkpoint (default: '')
-    args.resume = '/home/tasi2425111/for_hpc/baru/i_mf/10_new_dataset/output/train/20250526-090717-mobile_former_294m-224/checkpoint-56.pth.tar'
+    args.resume = ''
     # path to dataset (root dir)
     args.data_dir = '/home/tasi2425111/restructured_resized_imagenet'  #Disesuaikan dengan kebutuhan
     # number of label classes (Model default if None)

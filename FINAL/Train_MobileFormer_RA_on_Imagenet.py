@@ -1,7 +1,7 @@
 num_classes = 1000
 
-#@title 2. DEFINISI ARSITEKTUR MODEL (Mobile-Former)
-#region 2. DEFINISI ARSITEKTUR MODEL (Mobile-Former)
+#@title DEFINISI ARSITEKTUR MODEL (Mobile-Fromer-RA)
+#region DEFINISI ARSITEKTUR MODEL (Mobile-Fromer-RA)
 import math
 import torch
 import random
@@ -605,9 +605,9 @@ class BaseBlock(nn.Module):
         return [x_out, z_out]
 
 
-class MobileFormer(nn.Module):
+class MobileFormerRA(nn.Module):
     def __init__(self, cfg):
-        super(MobileFormer, self).__init__()
+        super(MobileFormerRA, self).__init__()
         self.token = nn.Parameter(nn.Parameter(torch.randn(1, cfg['token'], cfg['embed'])))
         # stem 3 224 224 -> 16 112 112
         self.stem = nn.Sequential(
@@ -719,15 +719,15 @@ from timm.utils import ApexScaler, NativeScaler
 def _assign_hyperparameter(args):
     ### CUSTOM ###
     # Load this checkpoint as if they were the pretrained weights (with adaptation) (default: None).
-    args.pretrained_path = '/home/tasi2425111/for_hpc/baru/i_mod/6_new_dataset/output/train/20250526-090752-mobile_former_294m-224/checkpoint-50.pth.tar'
+    args.pretrained_path = None
     # Resume full model and optimizer state from checkpoint (default: '')
-    args.resume = '/home/tasi2425111/for_hpc/baru/i_mod/6_new_dataset/output/train/20250526-090752-mobile_former_294m-224/checkpoint-50.pth.tar'
+    args.resume = ''
     # path to dataset (root dir)
     args.data_dir = '/home/tasi2425111/restructured_resized_imagenet'  #Disesuaikan dengan kebutuhan
     # number of label classes (Model default if None)
     args.num_classes = num_classes  #Disesuaikan dengan kebutuhan
     # Name of model to train (default: "resnet50")
-    args.model = 'mobile_former_294m' #mobile_former_294m  #Disesuaikan dengan kebutuhan
+    args.model = 'mobile_former_ra_294m' #mobile_former_ra_294m  #Disesuaikan dengan kebutuhan
     # Device (accelerator) to use.
     args.device = 'cuda:0'
     args.patience_epochs = 10
@@ -1214,7 +1214,7 @@ def main():
 
     # model = globals()[args.model]()
 
-    model = MobileFormer(config_294)
+    model = MobileFormerRA(config_294)
 
     if args.head_init_scale is not None:
         with torch.no_grad():

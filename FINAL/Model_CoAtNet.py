@@ -1,8 +1,8 @@
 num_classes = 1000
 
 
-#@title 2. DEFINISI ARSITEKTUR MODEL (CoAtNet)
-#region 2. DEFINISI ARSITEKTUR MODEL (CoAtNet)
+#@title DEFINISI ARSITEKTUR MODEL (CoAtNet)
+#region DEFINISI ARSITEKTUR MODEL (CoAtNet)
 
 import torch
 import torch.nn as nn
