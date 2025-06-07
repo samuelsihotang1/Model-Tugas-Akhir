@@ -649,7 +649,7 @@ def _assign_hyperparameter(args):
     # Resume full model and optimizer state from checkpoint (default: '')
     args.resume = ''
     # path to dataset (root dir)
-    args.data_dir = '/home/tasi2425111/restructured-resized-tiny-imagenet-200'  #Disesuaikan dengan kebutuhan
+    args.data_dir = '../restructured-resized-tiny-imagenet-200' #Disesuaikan dengan kebutuhan
     # number of label classes (Model default if None)
     args.num_classes = num_classes  #Disesuaikan dengan kebutuhan
     # Name of model to train (default: "resnet50")
