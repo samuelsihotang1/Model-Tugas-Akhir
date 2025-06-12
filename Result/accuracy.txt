@@ -1,9 +1,14 @@
-Imagenet:
+10% Imagenet:
 Mobile-Former = 33.632%
 Coatnet = 42.366%
 Mobile-Former RA = 34.7%
 
-TinyImagenet:
+10% TinyImagenet:
 Mobile-Former = 27.55%
 Coatnet = 30.75%
 Mobile-Former RA = 28%
+
+100% TinyImagenet:
+Mobile-Former = 60.17%
+Coatnet = 67.24%
+Mobile-Former RA = 60.5%
