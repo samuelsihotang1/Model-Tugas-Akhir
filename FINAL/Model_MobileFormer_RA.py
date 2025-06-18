@@ -374,12 +374,8 @@ class Attention(nn.Module):
             nn.Dropout(dropout)
         ) if project_out else nn.Identity()
 
-        # Tambahkan relative position bias table
         if self.relative_pos:
-            # Tabel posisi relatif: (2*M-1, heads)
-            self.pos_bias_table = nn.Parameter(torch.randn(2 * num_tokens - 1, heads))
-
-            # Buat koordinat dan indeks relatif
+            self.pos_table = nn.Parameter(torch.randn(2 * num_tokens - 1, heads))
             coords = torch.arange(num_tokens)
             relative_indices = coords.unsqueeze(1) - coords.unsqueeze(0)  # M x M
             relative_indices += num_tokens - 1  # shift to start from 0
@@ -394,12 +390,10 @@ class Attention(nn.Module):
 
         dots = einsum('b h i d, b h j d -> b h i j', q, k) * self.scale  # (B, H, M, M)
 
-        # Tambahkan relative position bias
         if self.relative_pos:
-            # Ambil bias berdasarkan indeks relatif: shape [M, M] -> [M*M] -> ambil dari tabel
-            pos_bias = self.pos_bias_table[self.relative_indices.view(-1)]  # (M*M, H)
-            pos_bias = pos_bias.view(1, self.heads, M, M).expand(B, -1, -1, -1)  # (B, H, M, M)
-            dots = dots + pos_bias
+            pos = self.pos_table[self.relative_indices.view(-1)]  # (M*M, H)
+            pos = pos.view(1, self.heads, M, M).expand(B, -1, -1, -1)  # (B, H, M, M)
+            dots = dots + pos
 
         attn = self.attend(dots)
         out = einsum('b h i j, b h j d -> b h i d', attn, v)  # (B, H, M, D_h)
