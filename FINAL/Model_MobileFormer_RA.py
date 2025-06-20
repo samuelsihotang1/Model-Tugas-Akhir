@@ -375,10 +375,31 @@ class Attention(nn.Module):
         ) if project_out else nn.Identity()
 
         if self.relative_pos:
-            self.pos_table = nn.Parameter(torch.randn(2 * num_tokens - 1, heads))
-            coords = torch.arange(num_tokens)
-            relative_indices = coords.unsqueeze(1) - coords.unsqueeze(0)  # M x M
-            relative_indices += num_tokens - 1  # shift to start from 0
+            # 1. Membuat 'Tabel Contekan Bobot Jarak'
+            self.pos_table = nn.Parameter(torch.randn(2 * num_tokens - 1, heads)) 
+            # Ukurannya (2*6-1) = 11 x jumlah heads
+
+            # 2. Membuat 'Peta Indeks Jarak'
+            coords = torch.arange(num_tokens) # [0, 1, 2, 3, 4, 5]
+            relative_indices = coords.unsqueeze(1) - coords.unsqueeze(0) # Matriks 6x6
+            # Hasilnya:
+            # [[ 0, -1, -2, -3, -4, -5],
+            #  [ 1,  0, -1, -2, -3, -4],
+            #  [ 2,  1,  0, -1, -2, -3],
+            #  [ 3,  2,  1,  0, -1, -2],
+            #  [ 4,  3,  2,  1,  0, -1],
+            #  [ 5,  4,  3,  2,  1,  0]]
+
+            # 3. Menggeser Indeks agar tidak ada nilai negatif
+            relative_indices += num_tokens - 1  # Ditambah 6 - 1 = 5
+            # Hasilnya:
+            # [[ 5,  4,  3,  2,  1,  0],
+            #  [ 6,  5,  4,  3,  2,  1],
+            #  [ 7,  6,  5,  4,  3,  2],
+            #  [ 8,  7,  6,  5,  4,  3],
+            #  [ 9,  8,  7,  6,  5,  4],
+            #  [10,  9,  8,  7,  6,  5]]
+            
             self.register_buffer("relative_indices", relative_indices)
 
     def forward(self, x):  # x: (B, M, D), M = num_tokens
@@ -388,11 +409,17 @@ class Attention(nn.Module):
         qkv = self.to_qkv(x).chunk(3, dim=-1)
         q, k, v = map(lambda t: rearrange(t, 'b n (h d) -> b h n d', h=h), qkv)
 
-        dots = einsum('b h i d, b h j d -> b h i j', q, k) * self.scale  # (B, H, M, M)
+        # 1. Hitung skor perhatian awal
+        dots = einsum('b h i d, b h j d -> b h i j', q, k) * self.scale  # (B, H, 6, 6)
 
         if self.relative_pos:
-            pos = self.pos_table[self.relative_indices.view(-1)]  # (M*M, H)
-            pos = pos.view(1, self.heads, M, M).expand(B, -1, -1, -1)  # (B, H, M, M)
+            # 2. Ambil bobot penyesuaian dari 'Tabel Contekan'
+            pos = self.pos_table[self.relative_indices.view(-1)] # Mengambil data dari tabel
+            
+            # 3. Bentuk ulang agar sesuai dengan dimensi 'dots'
+            pos = pos.view(1, self.heads, M, M).expand(B, -1, -1, -1) # (B, H, 6, 6)
+            
+            # 4. Tambahkan bobot penyesuaian ke skor perhatian
             dots = dots + pos
 
         attn = self.attend(dots)
